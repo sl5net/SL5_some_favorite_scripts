@@ -114,6 +114,20 @@ SetTitleMatchMode,2
  ; mysql.exe -h localhost -u root -p wom15091718 < "E:\fre\private\office\job\Kunden\WoM\wom_lt.sql"
  
  
+ #IfWinActive ahk_class SciTEWindow 
+  ; thats the standard editor for autohotkey. i want shortcats like i use it in phpstorm
+  ; comment
+  ; ctrl shift b
+  ^NumpadDiv::
+      Last_A_This:=A_ThisFunc . A_ThisLabel
+  	ToolTip1sec(A_LineNumber . " " . A_ScriptName . " " . Last_A_This)
+
+    ;Send,{CtrlDown}{ShiftDown}b{ShiftUp}{CtrlUp
+    Send,^q{Down}
+  return
+  
+
+ 
  
 #IfWinActive,MINGW64:/
 ^v::
