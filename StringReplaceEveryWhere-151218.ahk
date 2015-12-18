@@ -231,7 +231,7 @@ TTYL (Talk to you later)
 
 
 ;<<<<<<<<<<<<<<< doSqlWeb <<<<<<<<<<<<<<<<<<<<<
-IfWinActive doSqlWeb
+#IfWinActive doSqlWeb
 doSqlWeb:
 :*:[a]::[a]'[a *', '*]'[/a]
 :*:[b]::[b]'[b *', '*]'[/b]
@@ -243,7 +243,7 @@ doSqlWeb:
 :*:[s]::[s][s *,*][/s]
 :*:[q]::[q][q *,*][/q]
 
-IfWinActive php
+#IfWinActive php
 :*:$this::$this->
 
 ;~ :*:selec::SELECT * FROM WHERE ORDER BY 
