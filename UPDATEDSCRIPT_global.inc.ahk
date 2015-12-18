@@ -50,5 +50,5 @@ Return
 #Include *i ToolTipSec.inc.ahk 
 #Include *i SL5_some_favorite_scripts-master/ToolTipSec.inc.ahk 
 
-#Include ToolTipSec_RemoveToolTip.inc.ahk 
+#Include *i ToolTipSec_RemoveToolTip.inc.ahk 
 #Include *i SL5_some_favorite_scripts-master/ToolTipSec_RemoveToolTip.inc.ahk 
