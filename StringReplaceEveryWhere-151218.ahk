@@ -3,6 +3,7 @@
 isDevellopperMode=true ; enthällt auch update script.
 ;>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 #Include *i init_global.init.inc.ahk
+#Include *i SL5_some_favorite_scripts-master/init_global.init.inc.ahk
 
 
 #IfWinActive, 
@@ -396,9 +397,12 @@ sendSlow(m,t)
 
 return  ; probably redundant. its more secure if we do that.
 #Include *i functions_global.inc.ahk
+#Include *i SL5_some_favorite_scripts-master/functions_global.inc.ahk
 ;<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 ;~ subroutinen beispielsweise müsen ans Dateiende
 #Include *i functions_global_dateiende.inc.ahk
+#Include *i SL5_some_favorite_scripts-master/functions_global_dateiende.inc.ahk
 ;>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 #Include *i UPDATEDSCRIPT_global.inc.ahk
+#Include *i SL5_some_favorite_scripts-master/UPDATEDSCRIPT_global.inc.ahk
 

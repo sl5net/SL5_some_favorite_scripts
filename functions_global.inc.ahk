@@ -1,4 +1,5 @@
 #Include *i init_global.init.inc.ahk
+#Include *i SL5_some_favorite_scripts-master/init_global.init.inc.ahk
 
 
 isInteger(var) {
@@ -781,4 +782,7 @@ isUrlAvailable(URL){
 }
 
 #Include ToolTipSec.inc.ahk 
+#Include *i SL5_some_favorite_scripts-master/ToolTipSec.inc.ahk 
+
 #Include *i UPDATEDSCRIPT_global.inc.ahk
+#Include *i SL5_some_favorite_scripts-master/UPDATEDSCRIPT_global.inc.ahk

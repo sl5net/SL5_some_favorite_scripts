@@ -2,7 +2,10 @@
 isDevellopperMode=true ; enthällt auch update script.
 ;>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 #Include *i init_global.init.inc.ahk
-#Include ping.ahk
+#Include *i SL5_some_favorite_scripts-master/init_global.init.inc.ahk
+
+#Include *i ping.ahk
+#Include *i SL5_some_favorite_scripts-master/ping.ahk
 
 lll(A_LineNumber, "window_event_listener.ahk")
 ;ToolTip5sec("testdd aösldkfjaös asödlfkj asödflkj", 0, 550)
@@ -424,10 +427,14 @@ SendSlow(s,ms)
 
 #Include *i move2Img_functions.inc.ahk
 #Include *i move2Img_functions-151218.inc.ahk
+#Include *i SL5_some_favorite_scripts-master/move2Img_functions-151218.inc.ahk
 
 #Include *i functions_global.inc.ahk
+#Include *i SL5_some_favorite_scripts-master/functions_global.inc.ahk
 ;<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 ;~ subroutinen beispielsweise müsen ans Dateiende
 #Include *i functions_global_dateiende.inc.ahk
+#Include *i SL5_some_favorite_scripts-master/functions_global_dateiende.inc.ahk
 ;>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 #Include *i UPDATEDSCRIPT_global.inc.ahk
+#Include *i SL5_some_favorite_scripts-master/UPDATEDSCRIPT_global.inc.ahk

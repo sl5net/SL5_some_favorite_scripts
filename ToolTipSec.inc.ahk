@@ -1,4 +1,5 @@
 #Include *i init_global.init.inc.ahk
+#Include *i SL5_some_favorite_scripts-master/init_global.init.inc.ahk
 
 ;~ GLOBAL_lllog_only_this_scriptName=ToolTipSec.inc.ahk
 ;<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
@@ -6,6 +7,7 @@
 ;~ ToolTip5sec("wwwww`nwwwww`nwwww`n", A_ScreenWidth - 100, A_ScreenHeight - 100)
 ;>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 #Include *i functions_global.inc.ahk
+#Include *i SL5_some_favorite_scripts-master/functions_global.inc.ahk
 
 
 
@@ -85,6 +87,5 @@ ToolTipSec(t,x=123,y=321,sec=1000)
   return
 }
 
-lll(A_LineNumber, "ToolTipSec.inc.ahk", "line before #Include,ToolTipSec_RemoveToolTip.inc.ahk")
-#Include,ToolTipSec_RemoveToolTip.inc.ahk
-lll(A_LineNumber, "ToolTipSec.inc.ahk" , -"line behind #Include,ToolTipSec_RemoveToolTip.inc.ahk")
+#Include *i ToolTipSec_RemoveToolTip.inc.ahk
+#Include *i SL5_some_favorite_scripts-master/ToolTipSec_RemoveToolTip.inc.ahk
