@@ -422,7 +422,8 @@ SendSlow(s,ms)
 
 
 
-; #Include move2Img_functions.inc.ahk
+#Include *i move2Img_functions.inc.ahk
+#Include *i move2Img_functions-151218.inc.ahk
 
 #Include *i functions_global.inc.ahk
 ;<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
