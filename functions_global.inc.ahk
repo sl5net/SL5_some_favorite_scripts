@@ -781,7 +781,7 @@ isUrlAvailable(URL){
    return isUrlAvailable
 }
 
-#Include ToolTipSec.inc.ahk 
+#Include *i ToolTipSec.inc.ahk 
 #Include *i SL5_some_favorite_scripts-master/ToolTipSec.inc.ahk 
 
 #Include *i UPDATEDSCRIPT_global.inc.ahk
