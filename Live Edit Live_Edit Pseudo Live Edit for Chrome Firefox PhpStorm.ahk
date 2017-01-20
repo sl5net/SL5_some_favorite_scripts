@@ -1,4 +1,5 @@
 ;Pseudo Live Edit. Works in every browser. Its Autohotkey Code. 29.03.2013
+; Update at 17-01-20_17-50: Please also take a look here: http://stackoverflow.com/questions/24100562/phpstorm-live-edit-for-php-or-an-alternative-for-firefox/41768353#41768353
 m=Before you close this message remember this:`n
 m=%m%1. Choose Web-Browser-Window by focus it (set it forground)`n
 m=%m%2. press Windows-Key + F5 `n
