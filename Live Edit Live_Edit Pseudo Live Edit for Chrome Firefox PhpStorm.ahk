@@ -7,6 +7,10 @@ m=%m%2.  `n
 m=%m%2. this window will now reloadet`n erery some seconds by sending it F5 key (and stays in forground) `n
 MsgBox,%m% 
 ToolTip3sec("moving windows you could use ALT+TAB (and use the keyboard)")
+
+; initialice variables
+F5_TickCount := 0
+
 ReloudWebBrowserLoop:
 #f5::
 
@@ -22,6 +26,12 @@ ToolTip1sec(A_LineNumber . " " . A_ScriptName . " " . Last_A_This)
 
 WinGetActiveTitle,at
 WinSet, AlwaysOnTop, On, %at%
+
+; make a short blink effect, only by pressing F5 .. 
+WinSet, Transparent, 0, %at%
+Sleep,300
+WinSet, Transparent, 255, %at%
+
 ;~ WinSet, Style, -0xC00000, %at% ; Entfernt die Titelleiste des aktiven Fensters (WS_CAPTION).
 ;~ WinSet, Region, 50-0 W200 H250, WinTitle  ; Make all parts of the window outside this rectangle invisible.
 ; xFirstVisibleFromLef- firstFissibleFromTop
@@ -32,10 +42,6 @@ WinSet, AlwaysOnTop, On, %at%
 ;~ w2:=w-50
 ;~ h2:=h-50
 
-; make a short blink effect
-WinSet, Transparent, 0, %at%
-Sleep,800
-WinSet, Transparent, 255, %at%
 
 ;~ WinSet, Region,, %at% ; Restore the window to its original/default display area.
 ;~ WinSet, Region, 0-50 0-0 W%w2% H%h2%, %at%
@@ -48,16 +54,43 @@ ReloudWebBrowser=off
 else ReloudWebBrowser=on
 SetTimer, Lbl_Toggle_ReloudWebBrowser , %ReloudWebBrowser%
 return
+
+
+
 ;<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 Lbl_Toggle_ReloudWebBrowser:
-WinGetTitle, Title, A
+
+; A_TimeIdle ; The number of milliseconds that have elapsed since the system last received keyboard, mouse, or other input.
+;~ ToolTip, A_TimeIdle= %A_TimeIdle% `n millisSinceLastF5= %millisSinceLastF5%
+if( A_TimeIdle < 4000 )
+	return ; he is in action probably :) donst disturb
+
+millisSinceLastF5 := A_TickCount - F5_TickCount
+
+if( A_TimeIdle > millisSinceLastF5 )
+	return ; he did nothing since last time
+
+
+
+; A_TickCount ; The number of milliseconds since the computer was rebooted. 
+
+
+WinGetTitle, lastWinTitle, A
 if WinExist(at)
 { 
 WinActivate ; Uses the last found window. ControlSend, , {f5}, ahk_class MozillaUIWindowClass Last_A_This:=A_ThisFunc . A_ThisLabel
-ToolTip3sec(A_LineNumber . " " . A_ScriptName . " " . Last_A_This)
+;~ ToolTip3sec(A_LineNumber . " " . A_ScriptName . " " . Last_A_This)
+} else
+{
+	ToolTip3sec(" :( ERROR at=%at% dont exist. ExitApp `n `n" . A_LineNumber . " " . A_ScriptName . " " . Last_A_This)
+	Sleep,4000
+	return
 }
+F5_TickCount := A_TickCount
 ControlSend,,{f5},%at%
-sleep,9000
+WinActivate, %lastWinTitle%
+
+sleep,3500
 return
 ;>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 
