@@ -1,11 +1,14 @@
 ;Pseudo Live Edit. Works in every browser. Its Autohotkey Code. 29.03.2013
 ; Update at 17-01-20_17-50: Please also take a look here: http://stackoverflow.com/questions/24100562/phpstorm-live-edit-for-php-or-an-alternative-for-firefox/41768353#41768353
-m=Before you close this message remember this:`n
+m=Before you close this message remember this:`n`n
 m=%m%1. Choose Web-Browser-Window by focus it (set it forground)`n
 m=%m%2. press Windows-Key + F5 `n
 m=%m%2.  `n
 m=%m%2. this window will now reloadet`n erery some seconds by sending it F5 key (and stays in forground) `n
-MsgBox,%m% 
+;~ MsgBox,%m% 
+SplashTextOn, 400, 300, A_LineNumber . " " . A_ScriptName, %m% 
+Sleep,3000
+SplashTextOff
 ToolTip3sec("moving windows you could use ALT+TAB (and use the keyboard)")
 
 ; initialice variables
@@ -62,7 +65,7 @@ Lbl_Toggle_ReloudWebBrowser:
 
 ; A_TimeIdle ; The number of milliseconds that have elapsed since the system last received keyboard, mouse, or other input.
 ;~ ToolTip, A_TimeIdle= %A_TimeIdle% `n millisSinceLastF5= %millisSinceLastF5%
-if( A_TimeIdle < 4000 )
+if( A_TimeIdle < 2200 )
 	return ; he is in action probably :) donst disturb
 
 millisSinceLastF5 := A_TickCount - F5_TickCount
@@ -76,9 +79,20 @@ if( A_TimeIdle > millisSinceLastF5 )
 
 
 WinGetTitle, lastWinTitle, A
+if(InStr( lastWinTitle, "PhpStorm" ))
+{
+	;~ Send,^s ; save inside PhpStorm 22.01.2017 13:36
+	;~ ControlSend,,^s,%lastWinTitle% ; save inside PhpStorm 22.01.2017 13:36
+	Send,^s ; save inside PhpStorm 22.01.2017 13:36
+	Sleep,250 ; give the OS little time for save it.
+}
+else
+	return ; do nothing if focos is not inside phpstorm
+
 if WinExist(at)
 { 
-WinActivate ; Uses the last found window. ControlSend, , {f5}, ahk_class MozillaUIWindowClass Last_A_This:=A_ThisFunc . A_ThisLabel
+WinActivate, %at%
+; Uses the last found window. ControlSend, , {f5}, ahk_class MozillaUIWindowClass Last_A_This:=A_ThisFunc . A_ThisLabel
 ;~ ToolTip3sec(A_LineNumber . " " . A_ScriptName . " " . Last_A_This)
 } else
 {
