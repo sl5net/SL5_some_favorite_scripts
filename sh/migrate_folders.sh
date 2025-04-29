@@ -7,6 +7,9 @@ FOLDER_PAIRS=(
     ["Dokumente"]="Documents"
     ["Bilder"]="Pictures"
     ["Musik"]="Music"
+    ["Öffentlich"]="Public"
+    ["Vorlagen"]="Templates"
+    ["Schreibtisch"]="Desktop"
 )
 # --- End Configuration ---
 
@@ -28,6 +31,14 @@ for german_name in "${!FOLDER_PAIRS[@]}"; do
     english_dir="$HOME/$english_name"
 
     echo -n "Processing '$german_name' -> '$english_name': "
+
+    # --- NEW CHECK: Prevent processing if names are identical ---
+    if [ "$german_dir" == "$english_dir" ]; then
+        echo "  Source ('$german_name') and Destination ('$english_name') names are the same. Skipping this pair entirely."
+        echo "--------------------------------------------------"
+        continue # Move to the next pair in the loop
+    fi
+    # --- End NEW CHECK ---
 
     # Check if the German source directory exists and is actually a directory
     if [ -d "$german_dir" ] && [ ! -L "$german_dir" ]; then
