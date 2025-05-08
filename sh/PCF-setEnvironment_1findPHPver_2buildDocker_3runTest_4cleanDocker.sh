@@ -1,8 +1,41 @@
 #!/bin/bash
 
+# Konsole leeren
+clear
+
+# Fester Pfad zum Ziel-Projektverzeichnis
+# PASSE DIESEN PFAD UNBEDINGT AN DEINE UMGEBUNG AN!
+TARGET_PROJECT_DIR="$HOME/projects/php/SL5_preg_contentFinder"
+# $HOME expandiert zum Home-Verzeichnis des Benutzers, z.B. /home/seeh
+
+
+# In das Ziel-Projektverzeichnis wechseln
+cd "$TARGET_PROJECT_DIR" || { echo "FEHLER: Konnte nicht in das Verzeichnis '$TARGET_PROJECT_DIR' wechseln."; exit 1; }
+
+
 # --- Konfiguration (kann angepasst werden) ---
 PROJECT_ROOT=$(pwd) # Annahme: Skript wird vom Projekt-Root ausgeführt
 
+
+# --- HILFSFUNKTIONEN (show_help, check_docker_running, get_php_version_from_dockerfile, get_target_php_version) ---
+show_help() {
+    local script_name
+    script_name=$(basename "$0")
+    echo "Verwendung: $script_name {b|t|c|n|p|h}"
+    echo ""
+    echo "Dieses Skript verwaltet die Docker-Umgebung für das Projekt:"
+    echo "  $TARGET_PROJECT_DIR" # TARGET_PROJECT_DIR muss oben definiert sein
+    echo ""
+    echo "Aktionen (erster Buchstabe genügt):"
+    echo "  b (build)        Baut das Docker-Image basierend auf dem aktuellen Git-Stand im Zielprojekt."
+    echo "  t (test)         Führt die PHPUnit-Tests im Docker-Container aus (Code aus Zielprojekt)."
+    echo "  c (cleanup)      Räumt ungenutzte Docker-Ressourcen auf."
+    echo "  n (name)         Zeigt den ermittelten Docker-Image-Namen an."
+    echo "  p (php_version)  Zeigt die ermittelte PHP-Version an."
+    echo "  h (help)         Zeigt diese Hilfe an."
+    echo ""
+    echo "Das Skript wechselt automatisch in das Ziel-Projektverzeichnis."
+}
 
 
 get_target_php_version() {
@@ -148,42 +181,31 @@ check_docker_running() {
     return 0 # Erfolg, Docker läuft
 }
 
-
 build_image() {
     if ! check_docker_running; then
-        # check_docker_running hat bereits eine ausführliche Meldung ausgegeben
         return 1
     fi
 
     local image_name
-    # Um mehrfache Ausgaben von get_target_php_version zu vermeiden, speichern wir das Ergebnis
-    local php_version_details # Enthält die volle Ausgabe von get_target_php_version
-    php_version_details=$(get_target_php_version)
-    local actual_php_version # Enthält nur die reine Versionsnummer für den Tag
-    # Extrahieren der reinen Versionsnummer aus den Details (vereinfacht, nimmt die letzte Zeile der Ausgabe von get_target_php_version)
-    actual_php_version=$(echo "$php_version_details" | tail -n 1)
+    local actual_php_version
 
+    echo "--- PHP-Versionserkennung (Ausgabe nach STDERR) ---" >&2
+    actual_php_version=$(get_target_php_version) # Ruft Funktionen auf, die im Kontext von TARGET_PROJECT_DIR arbeiten
+    echo "---------------------------------------------------" >&2
+
+    echo
+    echo "Aktueller Git-Stand im Projekt '$PROJECT_ROOT': $(git rev-parse --short HEAD) auf Ref: $(git symbolic-ref -q --short HEAD || git rev-parse HEAD)"
 
     if [[ "$actual_php_version" == "unknown" || -z "$actual_php_version" ]]; then
-        echo "Ermittelte PHP-Zielversion: $php_version_details" # Zeige die volle Debug-Info
-        echo "Konnte PHP-Version nicht bestimmen. Abbruch des Builds."
+        echo "FEHLER: PHP-Version ist 'unknown'. Abbruch des Builds."
         return 1
     fi
 
-    image_name=$(get_docker_image_name) # Ruft get_target_php_version intern erneut auf,
-                                        # aber wir brauchen den Namen hier.
-                                        # Die Ausgabe von get_target_php_version wird hier nicht direkt angezeigt.
+    echo "Verwende PHP-Version für Image-Tag: $actual_php_version"
+    image_name="sl5-preg-contentfinder-php${actual_php_version}-dev:latest"
+    echo "Baue Docker-Image als: $image_name (aus Kontext: $PROJECT_ROOT)"
 
-    echo "Aktueller Git-Stand: $(git rev-parse --short HEAD) auf Ref: $(git symbolic-ref -q --short HEAD || git rev-parse HEAD)"
-    echo "Ermittelte PHP-Zielversion (Details): $php_version_details"
-    echo "Baue Docker-Image als: $image_name"
-
-    if [[ "$image_name" == "pcf-error-unknown-php-version" ]]; then
-        echo "Fehler: Image-Name konnte nicht korrekt generiert werden (wegen unbekannter PHP-Version)."
-        echo "Abbruch des Builds."
-        return 1
-    fi
-
+    # docker build . bezieht sich auf das aktuelle Verzeichnis, das jetzt TARGET_PROJECT_DIR ist
     if docker build -t "$image_name" . ; then
         echo "Image $image_name erfolgreich gebaut."
     else
@@ -198,105 +220,80 @@ run_tests() {
     fi
 
     local image_name
-    local php_version_details
-    php_version_details=$(get_target_php_version)
     local actual_php_version
-    actual_php_version=$(echo "$php_version_details" | tail -n 1)
+
+    echo "--- PHP-Versionserkennung (Ausgabe nach STDERR) ---" >&2
+    actual_php_version=$(get_target_php_version)
+    echo "---------------------------------------------------" >&2
 
     if [[ "$actual_php_version" == "unknown" || -z "$actual_php_version" ]]; then
-        echo "Ermittelte PHP-Zielversion: $php_version_details"
-        echo "Konnte PHP-Version nicht bestimmen. Abbruch der Tests."
+        echo "FEHLER: PHP-Version ist 'unknown'. Abbruch der Tests."
         return 1
     fi
 
-    image_name=$(get_docker_image_name)
+    image_name="sl5-preg-contentfinder-php${actual_php_version}-dev:latest"
+    echo "Verwende PHP-Version $actual_php_version für Tests mit Image $image_name."
+    echo "Führe Tests aus Projekt '$PROJECT_ROOT' aus..."
 
-    if [[ "$image_name" == "pcf-error-unknown-php-version" ]]; then
-        echo "Fehler: Image-Name konnte nicht korrekt generiert werden (wegen unbekannter PHP-Version)."
-        echo "Abbruch der Tests."
-        return 1
-    fi
-
-    echo "Führe Tests mit Image $image_name aus..."
+    # -v "${PROJECT_ROOT}:/app" mountet das korrekte Verzeichnis
     docker run --rm -v "${PROJECT_ROOT}:/app" "$image_name" php /usr/local/bin/phpunit /app/tests/PHPUnit/Callback_Emty_Test.php
 }
 
 cleanup_docker() {
     if ! check_docker_running; then
-        # Wenn Docker hier nicht gestartet werden kann, ist Prune eh nicht möglich
         echo "INFO: Docker nicht gestartet, Aufräumen nicht möglich oder nicht nötig."
-        return 1 # Oder 0, da die Aktion "nichts tun" war.
+        return 1
     fi
-
     echo "Räume ungenutzte Docker-Ressourcen auf..."
     docker system prune -af
     echo "Docker-Aufräumarbeiten abgeschlossen."
 }
 
-# Hilfefunktion definieren, um Wiederholungen zu vermeiden
-show_help() {
-    echo "Verwendung: $0 {build|test|cleanup|name|php_version}"
-    echo ""
-    echo "Aktionen:"
-    echo "  build        Baut das Docker-Image basierend auf dem aktuellen Git-Stand."
-    echo "               Verwendet das Dockerfile im aktuellen Verzeichnis."
-    echo "  test         Führt die PHPUnit-Tests im Docker-Container aus."
-    echo "               Mountet das aktuelle Verzeichnis nach /app im Container."
-    echo "  cleanup      Räumt ungenutzte Docker-Ressourcen auf (entspricht 'docker system prune -af')."
-    echo "  name         Zeigt den ermittelten Docker-Image-Namen an (für Debugging)."
-    echo "  php_version  Zeigt die ermittelte PHP-Version an (für Debugging)."
-    echo ""
-    echo "Das Skript muss aus dem Projekt-Root-Verzeichnis ('SL5_preg_contentFinder') aufgerufen werden."
-    echo "Beispiel: ../$(basename "$0") build"
-}
 
-# Wenn keine Argumente übergeben wurden, zeige die Hilfe an und beende
+# --- Hauptlogik des Skripts (Argument-Parsing) ---
 if [ $# -eq 0 ]; then
-    echo "Fehler: Keine Aktion angegeben."
+    echo "Fehler: Keine Aktion angegeben." >&2 # Fehlermeldungen nach STDERR
     show_help
     exit 1
 fi
 
-# Verarbeite das erste Argument
-case "$1" in
-    build)
+# Ersten Buchstaben des Arguments extrahieren (und in Kleinbuchstaben umwandeln für Robustheit)
+action_arg=$(echo "$1" | tr '[:upper:]' '[:lower:]' | cut -c1)
+
+case "$action_arg" in
+    b) # build
         build_image
         ;;
-    test)
+    t) # test
         run_tests
         ;;
-    cleanup)
+    c) # cleanup
         cleanup_docker
         ;;
-    name)
-        # Nur den Namen ausgeben, nicht die Fehlermeldung von get_docker_image_name, falls Version unbekannt
-        img_name=$(get_docker_image_name)
-        if [[ "$?" -eq 0 && "$img_name" != "pcf-error-unknown-php-version" ]]; then
-            echo "$img_name"
+    n) # name
+        img_name=$(get_target_php_version)
+        if [[ "$img_name" != "unknown" && -n "$img_name" ]]; then
+            echo "sl5-preg-contentfinder-php${img_name}-dev:latest"
         else
-            # Fehlermeldung wird bereits von get_docker_image_name oder get_target_php_version ausgegeben
-            # Hier könnten wir zusätzlich den Hilfetext anzeigen oder einfach mit Fehler beenden
-            echo "Fehler beim Ermitteln des Image-Namens. Überprüfen Sie die PHP-Version." >&2
+            echo "Fehler beim Ermitteln des Image-Namens (PHP-Version 'unknown')." >&2
             exit 1
         fi
         ;;
-    php_version)
-        # Nur die Version ausgeben
+    p) # php_version
         php_ver=$(get_target_php_version)
         if [[ "$php_ver" != "unknown" && -n "$php_ver" ]]; then
             echo "$php_ver"
         else
-            # Fehlermeldung wird bereits von get_target_php_version ausgegeben
-            echo "Fehler beim Ermitteln der PHP-Version." >&2
+            echo "Fehler beim Ermitteln der PHP-Version ('unknown')." >&2
             exit 1
         fi
         ;;
-    help|--help|-h) # explizite Hilfeoption
+    h) # help
         show_help
         exit 0
         ;;
-    *) # Ungültige Aktion
-        echo "Fehler: Ungültige Aktion '$1'."
+    *)
+        echo "Fehler: Ungültige Aktion '$1' (oder '$action_arg')." >&2
         show_help
         exit 1
         ;;
