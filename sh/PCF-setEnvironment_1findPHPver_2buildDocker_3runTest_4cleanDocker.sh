@@ -1,20 +1,53 @@
 #!/bin/bash
 
-# Konsole leeren
 clear
 
-# Fester Pfad zum Ziel-Projektverzeichnis
-# PASSE DIESEN PFAD UNBEDINGT AN DEINE UMGEBUNG AN!
-TARGET_PROJECT_DIR="$HOME/projects/php/SL5_preg_contentFinder"
-# $HOME expandiert zum Home-Verzeichnis des Benutzers, z.B. /home/seeh
+# --- Konfiguration ---
+RELATIVE_PROJECT_PATH="projects/php/SL5_preg_contentFinder"
+TARGET_PROJECT_DIR="$HOME/$RELATIVE_PROJECT_PATH"
+SCRIPT_FULL_PATH="$0" # Der volle Pfad, mit dem das Skript aufgerufen wurde
+SCRIPT_NAME=$(basename "$0")
+# Alle an das Skript übergebenen Argumente als String speichern
+SCRIPT_ARGS_STRING="$*"
+
+# Für die Anzeige Pfade mit Tilde aufbereiten
+display_target_dir=$(echo "$TARGET_PROJECT_DIR" | sed "s|^$HOME|~|")
+current_dir_displayable=$(pwd | sed "s|^$HOME|~|")
+
+echo "===================================================================="
+echo "Starte PCF Environment Management Skript: $SCRIPT_NAME"
+echo "Konfiguriertes Ziel-Projektverzeichnis: $display_target_dir"
+echo "===================================================================="
+echo
+
+# Prüfen, ob das Ziel-Projektverzeichnis existiert
+if [ ! -d "$TARGET_PROJECT_DIR" ]; then
+    echo "FEHLER: Das Ziel-Projektverzeichnis '$display_target_dir' wurde nicht gefunden." >&2
+    echo "Bitte überprüfen Sie den Pfad im Skript (RELATIVE_PROJECT_PATH) oder erstellen Sie das Verzeichnis." >&2
+    exit 1
+fi
+
+# Logik für Verzeichniswechsel und Neustart-Hinweis
+if [ "$(pwd)" != "$TARGET_PROJECT_DIR" ]; then
+    if [[ "$SCRIPT_FULL_PATH" == /* ]]; then
+        echo "cd $display_target_dir ; \"$SCRIPT_FULL_PATH\" $SCRIPT_ARGS_STRING"
+    else
+        path_to_script_repo_from_home="projects/SL5_some_favorite_scripts/sh" # Beispiel anpassen!
+        echo "cd $display_target_dir ; ~/$path_to_script_repo_from_home/$SCRIPT_NAME $SCRIPT_ARGS_STRING"
+    fi
+    echo "" >&2 # Leerzeile danach
+    echo "INFO: Das Skript wird nun intern in '$display_target_dir' für die aktuellen Operationen wechseln." >&2
+
+    cd "$TARGET_PROJECT_DIR" || { echo "FEHLER: Konnte nicht in '$display_target_dir' wechseln."; exit 1; }
+else
+    echo "INFO: Bereits im Ziel-Projektverzeichnis: $display_target_dir" >&2
+fi
+
+# Für die interne Logik immer den absoluten Pfad verwenden
+PROJECT_ROOT=$(pwd)
+# echo "INFO: Arbeitsverzeichnis für Skript-Operationen ist jetzt: $PROJECT_ROOT (angezeigt als $(echo $PROJECT_ROOT | sed "s|^$HOME|~|"))" >&2
 
 
-# In das Ziel-Projektverzeichnis wechseln
-cd "$TARGET_PROJECT_DIR" || { echo "FEHLER: Konnte nicht in das Verzeichnis '$TARGET_PROJECT_DIR' wechseln."; exit 1; }
-
-
-# --- Konfiguration (kann angepasst werden) ---
-PROJECT_ROOT=$(pwd) # Annahme: Skript wird vom Projekt-Root ausgeführt
 
 
 # --- HILFSFUNKTIONEN (show_help, check_docker_running, get_php_version_from_dockerfile, get_target_php_version) ---
