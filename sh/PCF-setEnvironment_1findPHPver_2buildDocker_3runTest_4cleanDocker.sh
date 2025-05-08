@@ -54,11 +54,12 @@ show_help() {
     echo "Aktionen (erster Buchstabe genügt):"
     echo "  b (build)        Baut das Docker-Image basierend auf dem aktuellen Git-Stand im Zielprojekt."
     echo "  t (test)         Führt die PHPUnit-Tests im Docker-Container aus (Code aus Zielprojekt)."
-    echo "  c (cleanup)      Räumt ungenutzte Docker-Ressourcen auf."
+    echo "  c (cleanup)      Räumt ungenutzte Docker-Ressourcen auf (docker system prune -af)."
+    echo "                   Tipp: Mit 'docker system df' oder der Aktion 's' (status) können Sie den Speicherverbrauch prüfen."
     echo "  n (name)         Zeigt den ermittelten Docker-Image-Namen an."
     echo "  p (php_version)  Zeigt die ermittelte PHP-Version an."
-    echo "  h (help)         Zeigt diese Hilfe an."
-    echo ""
+    echo "  s (status)       Zeigt den aktuellen Docker-Speicherverbrauch an (docker system df)." # NEUE AKTION
+    echo "  h (help)         Zeigt diese Hilfe an."    echo ""
     echo "Das Skript stellt sicher, dass es im Kontext des Ziel-Projektverzeichnisses arbeitet."
     echo ""
     echo "TIPP: Für einen bequemeren Aufruf können Sie eine Funktion 'pcf' einrichten."
@@ -285,16 +286,37 @@ run_tests() {
     docker run --rm -v "${PROJECT_ROOT}:/app" "$image_name" php /usr/local/bin/phpunit /app/tests/PHPUnit/Callback_Emty_Test.php
 }
 
-cleanup_docker() {
+# Neue Funktion für Docker System Status
+show_docker_storage_status() {
     if ! check_docker_running; then
-        echo "INFO: Docker nicht gestartet, Aufräumen nicht möglich oder nicht nötig."
         return 1
     fi
-    echo "Räume ungenutzte Docker-Ressourcen auf..."
-    docker system prune -af
-    echo "Docker-Aufräumarbeiten abgeschlossen."
+    echo "Aktueller Docker-Speicherverbrauch:" >&2
+    docker system df
+    echo "" >&2
+    echo "Um Speicher freizugeben, verwenden Sie die 'c' (cleanup) Aktion." >&2
 }
 
+cleanup_docker() {
+    if ! check_docker_running; then
+        echo "INFO: Docker nicht gestartet, Aufräumen nicht möglich oder nicht nötig." >&2
+        return 1
+    fi
+
+    echo "Aktueller Docker-Speicherverbrauch (vor dem Aufräumen):" >&2
+    docker system df # Ausgabe nach STDOUT, wird direkt angezeigt
+    echo "" >&2 # Leerzeile
+
+    echo "Räume ungenutzte Docker-Ressourcen auf (docker system prune -af)..." >&2
+    docker system prune -af
+    echo "" >&2
+
+    echo "Docker-Speicherverbrauch nach dem Aufräumen:" >&2
+    docker system df # Erneute Ausgabe nach STDOUT
+    echo "" >&2
+
+    echo "Docker-Aufräumarbeiten abgeschlossen." >&2
+}
 
 # --- Hauptlogik des Skripts (Argument-Parsing) ---
 if [ $# -eq 0 ]; then
@@ -312,6 +334,9 @@ case "$action_arg" in
         ;;
     t) # test
         run_tests
+        ;;
+    s) # status
+        show_docker_storage_status
         ;;
     c) # cleanup
         cleanup_docker
