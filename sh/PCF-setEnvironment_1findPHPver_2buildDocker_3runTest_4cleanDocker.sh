@@ -5,14 +5,16 @@ clear
 # --- Konfiguration ---
 RELATIVE_PROJECT_PATH="projects/php/SL5_preg_contentFinder"
 TARGET_PROJECT_DIR="$HOME/$RELATIVE_PROJECT_PATH"
-# Für den Neustart-Hinweis, falls benötigt:
-PATH_TO_SCRIPT_REPO_FROM_HOME="projects/SL5_some_favorite_scripts/sh" # Pfad zum Repo mit diesem Skript, relativ zu $HOME
+# Pfad zum Repository, das dieses Skript enthält, relativ zu $HOME
+# WICHTIG: Diesen Pfad an deine Struktur anpassen, falls nötig!
+PATH_TO_SCRIPT_REPO_FROM_HOME="projects/SL5_some_favorite_scripts/sh"
 SCRIPT_FULL_PATH="$0"
 SCRIPT_NAME=$(basename "$0")
 SCRIPT_ARGS_STRING="$*"
 
-# Für die Anzeige Pfade mit Tilde aufbereiten (wird im Neustart-Hinweis verwendet)
+# Für die Anzeige Pfade mit Tilde aufbereiten
 display_target_dir=$(echo "$TARGET_PROJECT_DIR" | sed "s|^$HOME|~|")
+
 
 # Prüfen, ob das Ziel-Projektverzeichnis existiert
 if [ ! -d "$TARGET_PROJECT_DIR" ]; then
@@ -25,7 +27,7 @@ fi
 if [ "$(pwd)" != "$TARGET_PROJECT_DIR" ]; then
     # Der Neustart-Hinweis wird nur ausgegeben, wenn man NICHT im Zielverzeichnis ist.
     # Er verwendet $SCRIPT_NAME und $PATH_TO_SCRIPT_REPO_FROM_HOME
-    echo "cd $display_target_dir ; ~/$PATH_TO_SCRIPT_REPO_FROM_HOME/$SCRIPT_NAME $SCRIPT_ARGS_STRING"
+    echo "cd $display_target_dir ; ~/$PATH_TO_SCRIPT_REPO_FROM_HOME/$SCRIPT_NAME $SCRIPT_ARGS_STRING" >&2
     echo "" >&2 # Leerzeile nach dem Befehlsvorschlag
 
     cd "$TARGET_PROJECT_DIR" || { echo "FEHLER: Konnte nicht in '$display_target_dir' wechseln."; exit 1; }
@@ -35,14 +37,19 @@ fi
 PROJECT_ROOT=$(pwd)
 
 
-# --- HILFSFUNKTIONEN (show_help, check_docker_running, get_php_version_from_dockerfile, get_target_php_version) ---
+
 show_help() {
-    local script_name
-    script_name=$(basename "$0")
-    echo "Verwendung: $script_name {b|t|c|n|p|h}"
+    # SCRIPT_NAME, TARGET_PROJECT_DIR, PATH_TO_SCRIPT_REPO_FROM_HOME sind oben global definiert
+    # display_target_dir für die Anzeige des Projektpfades mit Tilde
+
+    # Konstruiere den Pfad, der in der Funktion/Alias verwendet werden soll (mit $HOME für korrekte Expansion)
+    # Dieser Pfad wird dann in den echo-Befehlen verwendet.
+    local script_call_path_for_function="\$HOME/$PATH_TO_SCRIPT_REPO_FROM_HOME/$SCRIPT_NAME" # Wichtig: \$HOME damit $HOME literarisch ausgegeben wird
+
+    echo "Verwendung: $SCRIPT_NAME {b|t|c|n|p|h}"
     echo ""
     echo "Dieses Skript verwaltet die Docker-Umgebung für das Projekt:"
-    echo "  $TARGET_PROJECT_DIR" # TARGET_PROJECT_DIR muss oben definiert sein
+    echo "  $display_target_dir"
     echo ""
     echo "Aktionen (erster Buchstabe genügt):"
     echo "  b (build)        Baut das Docker-Image basierend auf dem aktuellen Git-Stand im Zielprojekt."
@@ -52,8 +59,29 @@ show_help() {
     echo "  p (php_version)  Zeigt die ermittelte PHP-Version an."
     echo "  h (help)         Zeigt diese Hilfe an."
     echo ""
-    echo "Das Skript wechselt automatisch in das Ziel-Projektverzeichnis."
+    echo "Das Skript stellt sicher, dass es im Kontext des Ziel-Projektverzeichnisses arbeitet."
+    echo ""
+    echo "TIPP: Für einen bequemeren Aufruf können Sie eine Funktion 'pcf' einrichten."
+    echo "      Das Skript wird weiterhin intern in das Projektverzeichnis '$display_target_dir' wechseln."
+    echo ""
+    echo "  Für Bash (in ~/.bashrc oder ~/.bash_profile einfügen):"
+    echo "    pcf() { \"${script_call_path_for_function}\" \"\$@\"; }" # Zeigt \$HOME/... und \$@
+    echo "    # Danach 'source ~/.bashrc' (oder .bash_profile) oder neues Terminal öffnen."
+    echo ""
+    echo "  Für Zsh (in ~/.zshrc einfügen):"
+    echo "    pcf() { \"${script_call_path_for_function}\" \"\$@\"; }" # Zeigt \$HOME/... und \$@
+    echo "    # Danach 'source ~/.zshrc' oder neues Terminal öffnen."
+    echo ""
+    echo "  Für Fish Shell (in ~/.config/fish/config.fish einfügen):"
+    echo "    function pcf"
+    echo "        \"${script_call_path_for_function}\" \$argv" # Zeigt \$HOME/... und \$argv
+    echo "    end"
+    echo "    # Optional: 'funcsave pcf' im Terminal ausführen, um die Funktion dauerhaft zu speichern."
+    echo "    # Danach neues Terminal öffnen oder Konfiguration neu laden."
+    echo ""
+    echo "  Nach der Einrichtung können Sie z.B. aufrufen: pcf b, pcf t, etc."
 }
+
 
 
 get_target_php_version() {
