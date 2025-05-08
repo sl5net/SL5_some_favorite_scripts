@@ -51,11 +51,28 @@ show_help() {
     echo "Dieses Skript verwaltet die Docker-Umgebung für das Projekt:"
     echo "  $display_target_dir"
     echo ""
-    echo "Aktionen (erster Buchstabe genügt):"
+        echo "Aktionen (erster Buchstabe genügt):"
     echo "  b (build)        Baut das Docker-Image basierend auf dem aktuellen Git-Stand im Zielprojekt."
     echo "  t (test)         Führt die PHPUnit-Tests im Docker-Container aus (Code aus Zielprojekt)."
     echo "  c (cleanup)      Räumt ungenutzte Docker-Ressourcen auf (docker system prune -af)."
     echo "                   Tipp: Mit 'docker system df' oder der Aktion 's' (status) können Sie den Speicherverbrauch prüfen."
+    echo "  bcp              Build Cache Prune: Löscht NUR den Docker Build-Cache."
+    echo "                   Nützlich, um sicherzustellen, dass der nächste Build frisch ist."
+    echo "                   Entspricht 'docker builder prune -af'." # KORRIGIERT
+
+    echo ""
+    echo "Hinweise zu Docker Prune Befehlen:"
+    echo "  - 'docker system prune -af' (Aktion 'c'): Ist sehr gründlich. Es entfernt alles, was Docker"
+    echo "    als 'ungenutzt' betrachtet. Das ist meistens sicher, kann aber manchmal auch Images löschen,"
+    echo "    die man vielleicht noch für einen schnellen Wechsel behalten wollte, wenn sie gerade"
+    echo "    von keinem Container verwendet werden."
+    echo "  - 'docker builder prune -af' (Aktion 'bcp' oder Teil von 'b p'): Konzentriert sich nur auf den"
+    echo "    Build-Cache. Das ist oft nützlich, um Build-Probleme zu lösen oder Speicher freizugeben,"
+    echo "    ohne andere Docker-Ressourcen zu beeinflussen."
+    echo "  - EMPFEHLUNG: Verwenden Sie 's' (Status), um zu sehen, was aufgeräumt werden könnte."
+    echo "    Beginnen Sie bei Speicherproblemen vielleicht erst mit 'bcp' und nur bei Bedarf mit 'c'."
+    echo ""
+
     echo "  n (name)         Zeigt den ermittelten Docker-Image-Namen an."
     echo "  p (php_version)  Zeigt die ermittelte PHP-Version an."
     echo "  s (status)       Zeigt den aktuellen Docker-Speicherverbrauch an (docker system df)." # NEUE AKTION
@@ -297,74 +314,96 @@ show_docker_storage_status() {
     echo "Um Speicher freizugeben, verwenden Sie die 'c' (cleanup) Aktion." >&2
 }
 
-cleanup_docker() {
+prune_build_cache() {
+    if ! check_docker_running; then
+        return 1
+    fi
+    echo "INFO: Räume Docker Build-Cache auf (docker builder prune -af)..." >&2
+    echo "      Dies entfernt alle nicht verwendeten Build-Cache-Layer." >&2
+    echo "      Nützlich für frische Builds oder um Speicherplatz freizugeben, der vom Cache belegt wird." >&2
+    if docker builder prune -af; then
+        echo "INFO: Docker Build-Cache erfolgreich aufgeräumt." >&2
+    else
+        echo "WARNUNG: Problem beim Aufräumen des Docker Build-Caches." >&2
+    fi
+}
+
+cleanup_docker() { # Diese Funktion führt 'docker system prune -af' aus
     if ! check_docker_running; then
         echo "INFO: Docker nicht gestartet, Aufräumen nicht möglich oder nicht nötig." >&2
         return 1
     fi
-
+    echo "INFO: Starte umfassendes Docker Cleanup (docker system prune -af)..." >&2
+    echo "      Dies löscht: " >&2
+    echo "        - Alle gestoppten Container" >&2
+    echo "        - Alle ungenutzten Netzwerke" >&2
+    echo "        - Alle ungenutzten (dangling und nicht getaggten) Images" >&2
+    echo "        - Den gesamten Build-Cache" >&2
+    echo "      Laufende Container und getaggte Images, die noch verwendet werden (z.B. als Basis für andere)," >&2
+    echo "      sollten NICHT entfernt werden." >&2
+    echo "" >&2
     echo "Aktueller Docker-Speicherverbrauch (vor dem Aufräumen):" >&2
-    docker system df # Ausgabe nach STDOUT, wird direkt angezeigt
-    echo "" >&2 # Leerzeile
-
-    echo "Räume ungenutzte Docker-Ressourcen auf (docker system prune -af)..." >&2
-    docker system prune -af
+    docker system df # Zeige Status vorher
     echo "" >&2
 
+    if docker system prune -af; then
+        echo "INFO: Docker System erfolgreich aufgeräumt." >&2
+    else
+        echo "WARNUNG: Problem beim Aufräumen des Docker Systems." >&2
+    fi
+    echo "" >&2
     echo "Docker-Speicherverbrauch nach dem Aufräumen:" >&2
-    docker system df # Erneute Ausgabe nach STDOUT
-    echo "" >&2
-
-    echo "Docker-Aufräumarbeiten abgeschlossen." >&2
+    docker system df # Zeige Status nachher
 }
 
 # --- Hauptlogik des Skripts (Argument-Parsing) ---
 if [ $# -eq 0 ]; then
-    echo "Fehler: Keine Aktion angegeben." >&2 # Fehlermeldungen nach STDERR
+    echo "Fehler: Keine Aktion angegeben." >&2
     show_help
     exit 1
 fi
 
-# Ersten Buchstaben des Arguments extrahieren (und in Kleinbuchstaben umwandeln für Robustheit)
-action_arg=$(echo "$1" | tr '[:upper:]' '[:lower:]' | cut -c1)
+action=$(echo "$1" | tr '[:upper:]' '[:lower:]')
+modifier=$(echo "$2" | tr '[:upper:]' '[:lower:]') # Zweites Argument als Modifikator
 
-case "$action_arg" in
-    b) # build
-        build_image
+case "$action" in
+    b|build)
+        build_image "$modifier" # Übergib den Modifikator (kann leer sein)
         ;;
-    t) # test
+    t|test)
         run_tests
         ;;
-    s) # status
-        show_docker_storage_status
-        ;;
-    c) # cleanup
+    c|cleanup)
         cleanup_docker
         ;;
-    n) # name
+    bcp|"buildcacheprune") # explizit für bcp
+        prune_build_cache
+        ;;
+    s|status)
+        show_docker_storage_status # show_docker_storage_status muss definiert sein
+        ;;
+    n|name)
         img_name=$(get_target_php_version)
         if [[ "$img_name" != "unknown" && -n "$img_name" ]]; then
             echo "sl5-preg-contentfinder-php${img_name}-dev:latest"
         else
-            echo "Fehler beim Ermitteln des Image-Namens (PHP-Version 'unknown')." >&2
-            exit 1
+            echo "Fehler beim Ermitteln des Image-Namens (PHP-Version 'unknown')." >&2; exit 1
         fi
         ;;
-    p) # php_version
+    p|php_version|phpversion)
         php_ver=$(get_target_php_version)
         if [[ "$php_ver" != "unknown" && -n "$php_ver" ]]; then
             echo "$php_ver"
         else
-            echo "Fehler beim Ermitteln der PHP-Version ('unknown')." >&2
-            exit 1
+            echo "Fehler beim Ermitteln der PHP-Version ('unknown')." >&2; exit 1
         fi
         ;;
-    h) # help
+    h|help|-h|--help)
         show_help
         exit 0
         ;;
     *)
-        echo "Fehler: Ungültige Aktion '$1' (oder '$action_arg')." >&2
+        echo "Fehler: Ungültige Aktion '$1'." >&2
         show_help
         exit 1
         ;;
