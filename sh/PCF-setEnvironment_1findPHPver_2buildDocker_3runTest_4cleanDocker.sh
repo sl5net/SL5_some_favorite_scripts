@@ -11,6 +11,7 @@ PATH_TO_SCRIPT_REPO_FROM_HOME="projects/SL5_some_favorite_scripts/sh"
 SCRIPT_FULL_PATH="$0"
 SCRIPT_NAME=$(basename "$0")
 SCRIPT_ARGS_STRING="$*"
+FLAG_FILE_PATH="/tmp/pcf_status_shown_on_boot.flag" # Eindeutiger Name für die Flag-Datei
 
 # Für die Anzeige Pfade mit Tilde aufbereiten
 display_target_dir=$(echo "$TARGET_PROJECT_DIR" | sed "s|^$HOME|~|")
@@ -35,8 +36,6 @@ fi
 
 # Für die interne Logik immer den absoluten Pfad verwenden
 PROJECT_ROOT=$(pwd)
-
-
 
 show_help() {
     # SCRIPT_NAME, TARGET_PROJECT_DIR, PATH_TO_SCRIPT_REPO_FROM_HOME sind oben global definiert
@@ -303,15 +302,19 @@ run_tests() {
     docker run --rm -v "${PROJECT_ROOT}:/app" "$image_name" php /usr/local/bin/phpunit /app/tests/PHPUnit/Callback_Emty_Test.php
 }
 
-# Neue Funktion für Docker System Status
 show_docker_storage_status() {
     if ! check_docker_running; then
-        return 1
+        # check_docker_running gibt bereits eine Meldung aus, falls Docker nicht läuft
+        return 1 # Signalisiert Fehler
     fi
-    echo "Aktueller Docker-Speicherverbrauch:" >&2
-    docker system df
-    echo "" >&2
-    echo "Um Speicher freizugeben, verwenden Sie die 'c' (cleanup) Aktion." >&2
+    # Führe docker system df aus. Die Ausgabe geht direkt nach STDOUT.
+    if docker system df; then
+        return 0 # Signalisiert Erfolg
+    else
+        # Falls docker system df selbst einen Fehler hat (selten, aber möglich)
+        echo "FEHLER: 'docker system df' konnte nicht erfolgreich ausgeführt werden." >&2
+        return 1 # Signalisiert Fehler
+    fi
 }
 
 prune_build_cache() {
@@ -356,12 +359,28 @@ cleanup_docker() { # Diese Funktion führt 'docker system prune -af' aus
     docker system df # Zeige Status nachher
 }
 
+
+
 # --- Hauptlogik des Skripts (Argument-Parsing) ---
 if [ $# -eq 0 ]; then
     echo "Fehler: Keine Aktion angegeben." >&2
     show_help
     exit 1
 fi
+
+# ... (FLAG_FILE_PATH etc.) ...
+if [ ! -f "$FLAG_FILE_PATH" ]; then
+    echo "--- Docker Speicherstatus (wird einmalig nach Systemstart angezeigt) ---" >&2
+    if show_docker_storage_status; then # Hier wird die oben definierte Funktion aufgerufen
+        touch "$FLAG_FILE_PATH"
+        echo "INFO: Docker-Status wurde angezeigt. Für diese Sitzung nicht erneut automatisch." >&2
+    else
+        echo "INFO: Docker-Status konnte nicht angezeigt werden (Docker evtl. nicht aktiv oder 'docker system df' fehlgeschlagen)." >&2
+    fi
+    echo "----------------------------------------------------------------------" >&2
+    echo # Leerzeile
+fi
+
 
 action=$(echo "$1" | tr '[:upper:]' '[:lower:]')
 modifier=$(echo "$2" | tr '[:upper:]' '[:lower:]') # Zweites Argument als Modifikator
@@ -370,17 +389,24 @@ case "$action" in
     b|build)
         build_image "$modifier" # Übergib den Modifikator (kann leer sein)
         ;;
+    bcp|"buildcacheprune") # explizit für bcp
+        prune_build_cache
+        ;;
     t|test)
         run_tests
         ;;
     c|cleanup)
         cleanup_docker
         ;;
-    bcp|"buildcacheprune") # explizit für bcp
-        prune_build_cache
-        ;;
     s|status)
-        show_docker_storage_status # show_docker_storage_status muss definiert sein
+        echo "Aktueller Docker-Speicherverbrauch:" >&2 # Zusätzlicher Text für die manuelle Aktion
+        if ! show_docker_storage_status; then # Hier wird dieselbe Funktion aufgerufen
+            # Die Funktion selbst oder check_docker_running gibt schon eine Fehlermeldung aus.
+            # Hier könnten wir noch einen Hinweis geben, falls gewünscht.
+            echo "INFO: Stellen Sie sicher, dass der Docker-Dienst läuft." >&2
+        fi
+        echo # Leerzeile danach
+        echo "Tipp: Mit 'c' (cleanup) können ungenutzte Ressourcen freigegeben werden." >&2
         ;;
     n|name)
         img_name=$(get_target_php_version)
