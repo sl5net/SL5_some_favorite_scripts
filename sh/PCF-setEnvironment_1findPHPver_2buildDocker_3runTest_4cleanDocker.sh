@@ -5,20 +5,14 @@ clear
 # --- Konfiguration ---
 RELATIVE_PROJECT_PATH="projects/php/SL5_preg_contentFinder"
 TARGET_PROJECT_DIR="$HOME/$RELATIVE_PROJECT_PATH"
-SCRIPT_FULL_PATH="$0" # Der volle Pfad, mit dem das Skript aufgerufen wurde
+# Für den Neustart-Hinweis, falls benötigt:
+PATH_TO_SCRIPT_REPO_FROM_HOME="projects/SL5_some_favorite_scripts/sh" # Pfad zum Repo mit diesem Skript, relativ zu $HOME
+SCRIPT_FULL_PATH="$0"
 SCRIPT_NAME=$(basename "$0")
-# Alle an das Skript übergebenen Argumente als String speichern
 SCRIPT_ARGS_STRING="$*"
 
-# Für die Anzeige Pfade mit Tilde aufbereiten
+# Für die Anzeige Pfade mit Tilde aufbereiten (wird im Neustart-Hinweis verwendet)
 display_target_dir=$(echo "$TARGET_PROJECT_DIR" | sed "s|^$HOME|~|")
-current_dir_displayable=$(pwd | sed "s|^$HOME|~|")
-
-echo "===================================================================="
-echo "Starte PCF Environment Management Skript: $SCRIPT_NAME"
-echo "Konfiguriertes Ziel-Projektverzeichnis: $display_target_dir"
-echo "===================================================================="
-echo
 
 # Prüfen, ob das Ziel-Projektverzeichnis existiert
 if [ ! -d "$TARGET_PROJECT_DIR" ]; then
@@ -29,25 +23,16 @@ fi
 
 # Logik für Verzeichniswechsel und Neustart-Hinweis
 if [ "$(pwd)" != "$TARGET_PROJECT_DIR" ]; then
-    if [[ "$SCRIPT_FULL_PATH" == /* ]]; then
-        echo "cd $display_target_dir ; \"$SCRIPT_FULL_PATH\" $SCRIPT_ARGS_STRING"
-    else
-        path_to_script_repo_from_home="projects/SL5_some_favorite_scripts/sh" # Beispiel anpassen!
-        echo "cd $display_target_dir ; ~/$path_to_script_repo_from_home/$SCRIPT_NAME $SCRIPT_ARGS_STRING"
-    fi
-    echo "" >&2 # Leerzeile danach
-    echo "INFO: Das Skript wird nun intern in '$display_target_dir' für die aktuellen Operationen wechseln." >&2
+    # Der Neustart-Hinweis wird nur ausgegeben, wenn man NICHT im Zielverzeichnis ist.
+    # Er verwendet $SCRIPT_NAME und $PATH_TO_SCRIPT_REPO_FROM_HOME
+    echo "cd $display_target_dir ; ~/$PATH_TO_SCRIPT_REPO_FROM_HOME/$SCRIPT_NAME $SCRIPT_ARGS_STRING"
+    echo "" >&2 # Leerzeile nach dem Befehlsvorschlag
 
     cd "$TARGET_PROJECT_DIR" || { echo "FEHLER: Konnte nicht in '$display_target_dir' wechseln."; exit 1; }
-else
-    echo "INFO: Bereits im Ziel-Projektverzeichnis: $display_target_dir" >&2
 fi
 
 # Für die interne Logik immer den absoluten Pfad verwenden
 PROJECT_ROOT=$(pwd)
-# echo "INFO: Arbeitsverzeichnis für Skript-Operationen ist jetzt: $PROJECT_ROOT (angezeigt als $(echo $PROJECT_ROOT | sed "s|^$HOME|~|"))" >&2
-
-
 
 
 # --- HILFSFUNKTIONEN (show_help, check_docker_running, get_php_version_from_dockerfile, get_target_php_version) ---
