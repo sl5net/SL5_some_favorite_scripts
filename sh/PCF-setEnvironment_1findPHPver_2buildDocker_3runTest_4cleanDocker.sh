@@ -49,7 +49,12 @@ show_help() {
     echo "Actions (first letter or specific acronym usually suffices):" # English Actions Intro
     echo "  b [p|prune]      Build the Docker image. Optionally use 'p' or 'prune' as a"
     echo "                   second argument to prune the Docker build cache beforehand."
-    echo "  t                Test: Runs PHPUnit tests inside the Docker container."
+
+    echo "  t [all|path]     Test: Runs PHPUnit. Default is to find and run the smallest test file." # NEU
+    echo "                   Use 'all' as the second argument to run the default suite (all tests)."
+    echo "                   Alternatively, provide a specific path (e.g., tests/MyTest.php) relative to"
+    echo "                   the project root or an absolute path within the container."
+
     echo "  c                Cleanup (Full): Prunes ALL unused Docker resources."
     echo "                   (stopped containers, unused networks, unused images, build cache)."
     echo "                   Equivalent to 'docker system prune -af'."
@@ -58,6 +63,7 @@ show_help() {
     echo "                   Equivalent to 'docker builder prune -af'."
     echo "  s                Status: Shows current Docker disk usage (docker system df)."
     echo "                   Tip: Run before 'c' or 'bcp' to see the potential effect."
+    echo "  stop (oder k)    Stops running containers associated with this project (based on image name pattern)."
     echo "  n                Name: Displays the determined Docker image name."
     echo "  p                PHP version: Displays the determined PHP version."
     echo "  h                Help: Displays this help overview."
@@ -97,22 +103,30 @@ show_help() {
 
 check_docker_running() {
     if ! docker ps > /dev/null 2>&1; then
-        echo "ERROR: Docker does not seem to be running or is not reachable." >&2 # English Error
-        echo # Empty line for readability
-        if command -v docker &> /dev/null; then
-            echo "  To start Docker for this session, try one of the following:" >&2 # English Start Hint
-            if command -v systemctl &> /dev/null && systemctl list-units --full -all | grep -q 'docker.service'; then
-                echo "  (For systemd systems like Manjaro)" >&2
-                echo "sudo systemctl start docker"
-            elif command -v service &> /dev/null && (service docker status > /dev/null 2>&1 || service --status-all | grep -q docker); then
-                echo "  (For older systems using 'service')" >&2
+        echo "ERROR: Docker does not seem to be running or is not reachable." >&2
+        echo
+
+        if command -v docker &> /dev/null; then # Docker ist installiert
+            # Versuche, die wahrscheinlichste Startmethode vorzuschlagen
+            if command -v systemctl &> /dev/null; then
+                 # Auf systemd-Systemen ist 'start docker.service' der Standard.
+                 # Wir schlagen es vor, auch wenn die list-units-Prüfung fehlschlug,
+                 # da es oft trotzdem funktioniert, wenn Docker installiert ist.
+                 echo "  To start Docker for this session, try:" >&2
+                 echo "sudo systemctl start docker"
+                 # Optional: Füge einen Hinweis hinzu, falls der Benutzer weiß, dass es anders ist
+                 echo "  (This is the standard command on most systemd systems like Manjaro.)" >&2
+            elif command -v service &> /dev/null; then # Fallback für ältere Systeme
+                echo "  To start Docker for this session, try:" >&2
+                 echo "  (For older systems using 'service')" >&2
                 echo "sudo service docker start"
             else
-                echo "  Docker seems installed, but its service management isn't standard (systemctl/service)." >&2
-                echo "  Please check your OS documentation on how to start the Docker service manually." >&2
+                 # Wenn weder systemctl noch service gefunden wurden (sehr unwahrscheinlich)
+                 echo "  Cannot determine standard service manager (systemctl or service)." >&2
+                 echo "  Please check your OS documentation on how to start the Docker service manually." >&2
             fi
-        else
-            echo "  Docker command not found. Docker might not be installed." >&2 # English Not Installed
+        else # Docker ist nicht installiert
+            echo "  Docker command not found. Docker might not be installed." >&2
             echo "  On Manjaro/Arch Linux, you can install Docker with:" >&2
             echo "sudo pacman -Syu docker"
             echo
@@ -129,6 +143,7 @@ check_docker_running() {
     fi
     return 0
 }
+
 
 get_php_version_from_dockerfile() {
     local dockerfile_path="./Dockerfile"
@@ -208,18 +223,6 @@ get_target_php_version() {
     fi
 }
 
-show_docker_storage_status() {
-    if ! check_docker_running; then
-        return 1
-    fi
-    if docker system df; then
-        return 0
-    else
-        echo "ERROR: 'docker system df' could not be executed successfully." >&2 # English Error
-        return 1
-    fi
-}
-
 prune_build_cache() {
     if ! check_docker_running; then
         return 1
@@ -275,6 +278,10 @@ build_image() {
 }
 
 run_tests() {
+    # $1 ist jetzt der optionale Modifikator ODER ein spezifischer Testpfad
+    local modifier_or_testpath="$1"
+    local test_command_args="" # Argumente für phpunit
+
     if ! check_docker_running; then
         return 1
     fi
@@ -282,20 +289,150 @@ run_tests() {
     local image_name
     local actual_php_version
 
-    echo "--- PHP Version Detection (Output to STDERR) ---" >&2 # English Header
+    echo "--- PHP Version Detection (Output to STDERR) ---" >&2
     actual_php_version=$(get_target_php_version)
-    echo "----------------------------------------------" >&2 # English Footer
+    echo "----------------------------------------------" >&2
 
     if [[ "$actual_php_version" == "unknown" || -z "$actual_php_version" ]]; then
-        echo "ERROR: PHP version is 'unknown'. Aborting tests." >&2 # English Error
+        echo "ERROR: PHP version is 'unknown'. Aborting tests." >&2
         return 1
     fi
 
-    image_name="sl5-preg-contentfinder-php${actual_php_version}-dev:latest"
-    echo "Using PHP version $actual_php_version for tests with image $image_name." # English Info
-    echo "Running tests from project '$PROJECT_ROOT'..." # English Info
 
-    docker run --rm -v "${PROJECT_ROOT}:/app" "$image_name" php /app/vendor/bin/phpunit /app/tests/PHPUnit/Callback_Emty_Test.php
+
+
+    image_name="sl5-preg-contentfinder-php${actual_php_version}-dev:latest"
+    echo "Using PHP version $actual_php_version for tests with image $image_name."
+
+    echo "INFO: Ensuring autoloader is up-to-date for the current codebase (using 'composer dump-autoload -o')..." >&2
+    # -w /app setzt das Arbeitsverzeichnis für den composer-Befehl
+    if ! docker run --rm -v "${PROJECT_ROOT}:/app" -w /app "$image_name" composer dump-autoload -o; then
+        echo "ERROR: Failed to dump autoloader. Aborting tests." >&2
+        return 1
+    fi
+    echo # Leerzeile
+
+
+
+
+
+
+    # Standardmäßig den kleinsten Test suchen, es sei denn, ein spezifischer Pfad oder "all" wird angegeben
+    if [[ -z "$modifier_or_testpath" ]]; then # KEIN Argument übergeben -> Standard: kleinsten suchen
+        local find_smallest_test_command="find /app/tests/PHPUnit -type f -name '*Test.php' -print0 | xargs -0 du -b | sort -n | head -n 1 | awk '{print \$2}'"
+        local smallest_test_file_path
+        smallest_test_file_path=$(docker run --rm -v "${PROJECT_ROOT}:/app" "$image_name" bash -c "$find_smallest_test_command")
+
+        if [[ -n "$smallest_test_file_path" && "$smallest_test_file_path" != *"No such file or directory"* ]]; then
+            test_command_args="$smallest_test_file_path" # Der gefundene Pfad wird als Argument verwendet
+            echo "INFO: Smallest test file found: $test_command_args" >&2
+        else
+            echo "ERROR: Could not find smallest test file. Aborting." >&2
+            return 1
+        fi
+    elif [[ "$(echo "$modifier_or_testpath" | tr '[:upper:]' '[:lower:]')" == "all" ]]; then # Argument ist "all"
+        echo "INFO: 'all' tests requested. Running PHPUnit without specific file (will use configured suite)." >&2
+        test_command_args="" # Kein spezifisches Argument, PHPUnit entscheidet
+    elif [[ "$modifier_or_testpath" == /* || "$modifier_or_testpath" == tests/* || "$modifier_or_testpath" == *.php ]]; then # Argument sieht wie ein Pfad aus
+        echo "INFO: Specific test path provided: $modifier_or_testpath" >&2
+        # Wichtig: Sicherstellen, dass der Pfad relativ zu /app ist, wenn er nicht absolut ist
+        if [[ "$modifier_or_testpath" != /* ]]; then
+           # Annahme: relative Pfade sind relativ zum Projekt-Root /app
+           test_command_args="/app/$modifier_or_testpath"
+        else
+           test_command_args="$modifier_or_testpath" # Ist bereits absolut
+        fi
+        # Hier könnte man noch prüfen, ob die Datei im Container existiert
+    else # Unbekannter Modifikator
+         echo "WARNING: Unknown test modifier or invalid path '$modifier_or_testpath'. Trying to run smallest test..." >&2
+         # Fallback zum Standard (kleinsten suchen) oder Abbruch? Hier Fallback:
+         local find_smallest_test_command="find /app/tests/PHPUnit -type f -name '*Test.php' -print0 | xargs -0 du -b | sort -n | head -n 1 | awk '{print \$2}'"
+         local smallest_test_file_path
+         smallest_test_file_path=$(docker run --rm -v "${PROJECT_ROOT}:/app" "$image_name" bash -c "$find_smallest_test_command")
+         if [[ -n "$smallest_test_file_path" && "$smallest_test_file_path" != *"No such file or directory"* ]]; then
+             test_command_args="$smallest_test_file_path"
+             echo "INFO: Fallback successful: Smallest test file found: $test_command_args" >&2
+         else
+             echo "ERROR: Could not find smallest test file (fallback failed). Aborting." >&2
+             return 1
+         fi
+    fi
+
+    # 4. HINWEIS vor der Ausführung
+    echo "" >&2 # Leerzeile davor
+    echo "--------------------------------------------------------------------" >&2
+    echo "NOTICE: The following test command will run inside the Docker" >&2
+    echo "        container '$image_name', using the PHP $actual_php_version defined" >&2
+    echo "        within that specific image." >&2
+    echo "" >&2
+    echo "        Running 'vendor/bin/phpunit ...' directly on your host machine" >&2
+    echo "        would use your host's installed PHP version and environment," >&2
+    echo "        which might lead to different results or errors." >&2
+    echo "--------------------------------------------------------------------" >&2
+    echo "" >&2 # Leerzeile danach
+
+    echo "Running tests from project '$PROJECT_ROOT'..."
+    echo "Executing in container: php /app/vendor/bin/phpunit $test_command_args" >&2
+
+    # Führe PHPUnit aus. $test_command_args kann leer sein (für 'all') oder einen Pfad enthalten.
+    docker run --rm -v "${PROJECT_ROOT}:/app" "$image_name" php /app/vendor/bin/phpunit $test_command_args
+
+}
+
+
+
+
+stop_project_containers() {
+    if ! check_docker_running; then
+        return 1
+    fi
+
+    # Definiere das Präfix deiner Projekt-Images
+    local project_image_prefix="sl5-preg-contentfinder-php"
+
+    echo "INFO: Searching for running containers based on images starting with '${project_image_prefix}'..." >&2
+
+    # Hole IDs und Namen der laufenden Container, deren Image mit dem Präfix beginnt
+    # Das Leerzeichen vor dem Präfix im grep stellt sicher, dass wir den Anfang des Image-Namens erwischen
+    # (da das Format "{{.ID}} {{.Image}}" ist)
+    local running_project_containers_info
+    running_project_containers_info=$(docker ps --filter "status=running" --format "{{.ID}}\t{{.Image}}\t{{.Names}}" | grep -E "[[:space:]]$project_image_prefix")
+
+    if [ -z "$running_project_containers_info" ]; then
+        echo "INFO: No running containers found with image prefix '${project_image_prefix}'." >&2
+        return 0
+    fi
+
+    echo "WARNING: The following running project-related containers were found:" >&2
+    # Formatiere die Ausgabe etwas schöner
+    echo "$running_project_containers_info" | awk 'BEGIN {FS="\t"; printf "  %-15s %-50s %s\n", "CONTAINER ID", "IMAGE", "NAMES"} {printf "  %-15s %-50s %s\n", $1, $2, $3}' >&2
+    echo "" >&2
+
+    # --- BEGINN ÄNDERUNG WEGEN KEINE BESTÄTIGUNG ---
+    echo "INFO: Proceeding to stop these containers WITHOUT further confirmation..." >&2
+    # read -r -p "Do you want to stop these containers? (yes/NO): " confirmation
+    # if [[ "$(echo "$confirmation" | tr '[:upper:]' '[:lower:]')" == "yes" ]]; then
+        local container_ids_to_stop
+        container_ids_to_stop=$(echo "$running_project_containers_info" | awk '{print $1}')
+
+        if [ -z "$container_ids_to_stop" ]; then # Sollte nicht passieren, wenn running_project_containers_info nicht leer war
+            echo "ERROR: Could not extract container IDs to stop." >&2
+            return 1
+        fi
+
+        echo "INFO: Stopping identified containers: $container_ids_to_stop" >&2
+        # Verwende xargs, um sicherzustellen, dass die IDs korrekt übergeben werden,
+        # besonders wenn es viele sind oder Sonderzeichen enthalten (unwahrscheinlich für IDs).
+        # Und um zu verhindern, dass 'docker stop' ohne Argumente aufgerufen wird, falls $container_ids_to_stop leer ist.
+        echo "$container_ids_to_stop" | xargs docker stop
+
+        if [ $? -eq 0 ]; then # Prüfe den Exit-Status des letzten Befehls (docker stop via xargs)
+            echo "INFO: Containers stopped successfully." >&2
+            return 0
+        else
+            echo "ERROR: Failed to stop one or more containers. Check Docker logs for details." >&2
+            return 1
+        fi
 }
 
 cleanup_docker() {
@@ -303,6 +440,21 @@ cleanup_docker() {
         echo "INFO: Docker not started, cleanup not possible or not needed." >&2 # English Info
         return 1
     fi
+
+   echo "INFO: Checking for running project-related containers before full cleanup..." >&2
+    # Versuche, projektbezogene Container zu stoppen.
+    # Wenn der User "nein" sagt, gibt stop_project_containers 0 zurück.
+    # Wenn ein Fehler beim Stoppen auftritt, gibt es 1 zurück.
+    if ! stop_project_containers; then
+        echo "WARNUNG: Could not stop all project-related containers or an error occurred. Cleanup might be incomplete for running containers." >&2
+        # Wir könnten hier entscheiden, abzubrechen, oder fortzufahren.
+        # 'docker system prune' löscht eh nur gestoppte.
+        # return 1 # Optional: Hier abbrechen, wenn Stoppen fehlschlug
+    fi
+    # Wenn wir hier sind, hat der User entweder "ja" oder "nein" gesagt, oder es gab keine.
+    # Fehler beim Stoppen wurden oben behandelt.
+
+
     echo "INFO: Starting comprehensive Docker cleanup (docker system prune -af)..." >&2 # English Info
     echo "      This will delete: " >&2
     echo "        - All stopped containers" >&2
@@ -331,72 +483,133 @@ cleanup_docker() {
 # --- SCRIPT LOGIC STARTS HERE (AFTER ALL FUNCTION DEFINITIONS) ---
 # ====================================================================
 
-# --- One-time Docker status display after system boot ---
-if [ ! -f "$FLAG_FILE_PATH" ]; then
-    echo "--- Docker Disk Usage (displayed once after system boot) ---" >&2 # English Header
-    if show_docker_storage_status; then
-        touch "$FLAG_FILE_PATH"
-        echo "INFO: Docker status displayed. Will not be shown automatically again this session." >&2 # English Info
-    else
-        echo "INFO: Docker status could not be displayed (Docker might not be active or 'docker system df' failed)." >&2 # English Info
-    fi
-    echo "----------------------------------------------------------------------" >&2 # English Footer
-    echo
-fi
-
-# --- Main script logic (Argument Parsing) ---
+# 1. Prüfen, ob überhaupt Argumente da sind
 if [ $# -eq 0 ]; then
-    echo "Error: No action specified." >&2 # English Error
+    echo "Error: No action specified." >&2
     show_help
     exit 1
 fi
 
+# 2. Argumente parsen
 action=$(echo "$1" | tr '[:upper:]' '[:lower:]')
 modifier=$(echo "$2" | tr '[:upper:]' '[:lower:]')
 
+# 3. Prüfen, ob Docker benötigt wird und läuft (für die meisten Aktionen)
+docker_needed=1 # Standardmäßig annehmen, dass Docker gebraucht wird
+case "$action" in
+    h|help|-h|--help|n|name|p|php_version|phpversion) # Aktionen, die KEIN Docker brauchen
+        docker_needed=0
+        ;;
+esac
+
+
+docker_is_running=0
+if [ $docker_needed -eq 1 ]; then
+    if check_docker_running; then # check_docker_running prüft UND gibt Fehlermeldung aus, wenn nicht
+        docker_is_running=1
+    else
+        # Docker läuft nicht, check_docker_running hat bereits informiert.
+        # Skript hier beenden, da die Aktion nicht ausgeführt werden kann.
+        exit 1
+    fi
+fi
+
+# --- Wenn wir hier sind, läuft Docker (falls benötigt) oder wird nicht benötigt ---
+
+# 4. Einmalige Docker-Statusanzeige nach Systemstart (nur wenn Docker gebraucht wird UND läuft)
+if [ $docker_needed -eq 1 ] && [ $docker_is_running -eq 1 ] && [ ! -f "$FLAG_FILE_PATH" ]; then
+    echo "--- Docker Disk Usage (displayed once after system boot) ---" >&2
+    if docker system df; then # Direkter Aufruf
+        touch "$FLAG_FILE_PATH"
+        echo "INFO: Docker status displayed. Will not be shown automatically again this session." >&2
+    else
+        echo "ERROR: 'docker system df' could not be executed successfully." >&2
+    fi
+    echo "----------------------------------------------------------------------" >&2
+    echo
+fi
+
+
+
+# --- Einmalige Docker-Statusanzeige nach Systemstart ---
+if [ ! -f "$FLAG_FILE_PATH" ]; then
+    echo "--- Docker Speicherstatus (wird einmalig nach Systemstart angezeigt) ---" >&2
+    # Prüfe ZUERST, ob Docker läuft
+    if check_docker_running; then
+        # Nur wenn Docker läuft, versuche den Status zu zeigen
+        if docker system df; then # Direkter Aufruf von docker system df
+             touch "$FLAG_FILE_PATH"
+             echo "INFO: Docker-Status wurde angezeigt. Für diese Sitzung nicht erneut automatisch." >&2
+        else
+             echo "FEHLER: 'docker system df' konnte nicht erfolgreich ausgeführt werden, obwohl Docker läuft." >&2
+             # Flag nicht setzen, damit es beim nächsten Mal erneut versucht wird? Oder doch? Diskutabel.
+             # Für den Moment setzen wir das Flag nicht.
+        fi
+    else
+        # Fehlermeldung kommt schon von check_docker_running
+        echo "INFO: Docker-Status kann nicht angezeigt werden, da Docker nicht aktiv ist." >&2
+        # Flag wird nicht gesetzt.
+    fi
+    echo "----------------------------------------------------------------------" >&2
+    echo
+fi
+
+
+
+# 5. Aktionen ausführen (Docker-Prüfung ist schon erfolgt, wenn nötig)
 case "$action" in
     b|build)
+        # Docker läuft garantiert, wenn wir hier sind
         build_image "$modifier"
         ;;
     t|test)
-        run_tests
+        # Docker läuft garantiert
+        run_tests "$modifier"
         ;;
     c|cleanup)
+        # Docker läuft garantiert
         cleanup_docker
         ;;
     bcp|"buildcacheprune")
+        # Docker läuft garantiert
         prune_build_cache
         ;;
+    stop|k)
+        stop_project_containers
+        ;;
     s|status)
-        echo "Current Docker disk usage:" >&2 # English Info
-        if ! show_docker_storage_status; then
-            echo "INFO: Ensure the Docker service is running." >&2 # English Info
-        fi
+        # Docker läuft garantiert
+        echo "Current Docker disk usage:" >&2
+        docker system df # Direkter Aufruf
         echo
-        echo "Tip: Use 'c' (cleanup) to free up unused resources." >&2 # English Tip
+        echo "Tip: Use 'c' (cleanup) to free up unused resources." >&2
         ;;
     n|name)
+        # Docker wird nicht benötigt, läuft hier direkt
         img_name=$(get_target_php_version)
         if [[ "$img_name" != "unknown" && -n "$img_name" ]]; then
             echo "sl5-preg-contentfinder-php${img_name}-dev:latest"
         else
-            echo "Error determining image name (PHP version 'unknown')." >&2; exit 1 # English Error
+            echo "Error determining image name (PHP version 'unknown')." >&2; exit 1
         fi
         ;;
     p|php_version|phpversion)
+         # Docker wird nicht benötigt
         php_ver=$(get_target_php_version)
         if [[ "$php_ver" != "unknown" && -n "$php_ver" ]]; then
             echo "$php_ver"
         else
-            echo "Error determining PHP version ('unknown')." >&2; exit 1 # English Error
+            echo "Error determining PHP version ('unknown')." >&2; exit 1
         fi
         ;;
     h|help|-h|--help)
+         # Docker wird nicht benötigt
         show_help
         exit 0
         ;;
     *)
-        echo "Error: Invalid action '$1'." >&2 # English Error
+        # Wurde eigentlich schon durch die Prüfung oben abgefangen, aber sicherheitshalber
+        echo "Error: Invalid action '$1'." >&2
         show_help
         exit 1
         ;;
