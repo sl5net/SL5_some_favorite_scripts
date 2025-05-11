@@ -271,10 +271,54 @@ build_image() {
 
     if docker build -t "$image_name" . ; then
         echo "Image $image_name built successfully." # English Success
+
+
+        # --- devcontainer.json aktualisieren ---
+        # sudo apt install jq
+        # sudo pacman -S jq
+        # maybe todo: Du musst VS Code dazu bringen, deine lokale devcontainer.json im Projektverzeichnis zu verwenden und nicht die im globalStorage.
+        local devcontainer_json_path="./.devcontainer/devcontainer.json" # Relativ zum PROJECT_ROOT
+        if [ -f "$devcontainer_json_path" ]; then
+            if command -v jq &> /dev/null; then
+                # Die Variable image_name wurde oben in der Funktion build_image definiert und enthält den korrekten Image-Namen
+                echo "INFO: Updating 'image' field in $devcontainer_json_path to '$image_name'..." >&2
+
+                tmp_json_file=$(mktemp)
+
+                # Verwende $imageName im jq Filter, passend zu --arg imageName
+                if jq --arg imageName "$image_name" \
+   '.image = $imageName | del(.dockerFile?) | del(.context?) | del(.build?)' \
+   "$devcontainer_json_path" > "$tmp_json_file"; then
+                   # Das ? nach den del-Feldern macht das Löschen optional, falls die Felder nicht existieren
+
+                    mv "$tmp_json_file" "$devcontainer_json_path"
+                    echo "INFO: $devcontainer_json_path updated successfully." >&2
+                    echo "      VS Code might need a 'Dev Containers: Rebuild Container' to use the new image." >&2
+                else
+                    echo "WARNING: Failed to update $devcontainer_json_path with jq. jq command failed." >&2
+                    rm -f "$tmp_json_file" # Temporäre Datei im Fehlerfall löschen
+                fi
+            else
+                echo "WARNING: 'jq' command not found. Cannot automatically update $devcontainer_json_path." >&2
+                echo "         Please set 'image': '$image_name' in $devcontainer_json_path manually if needed." >&2
+            fi
+        else
+            echo "INFO: $devcontainer_json_path not found, skipping update." >&2
+        fi
+        # --- ENDE devcontainer.json aktualisieren ---
+
+
     else
         echo "Error building image $image_name." >&2 # English Error
         return 1
     fi
+
+
+
+
+
+
+
 }
 
 run_tests() {
@@ -306,7 +350,7 @@ run_tests() {
 
     echo "INFO: Ensuring autoloader is up-to-date for the current codebase (using 'composer dump-autoload -o')..." >&2
     # -w /app setzt das Arbeitsverzeichnis für den composer-Befehl
-    if ! docker run --rm -v "${PROJECT_ROOT}:/app" -w /app "$image_name" composer dump-autoload -o; then
+    if ! docker run --rm -v "${PROJECT_ROOT}:/app"  -w /app  "$image_name" composer dump-autoload -o; then
         echo "ERROR: Failed to dump autoloader. Aborting tests." >&2
         return 1
     fi
@@ -317,11 +361,14 @@ run_tests() {
 
 
 
+
+
+
     # Standardmäßig den kleinsten Test suchen, es sei denn, ein spezifischer Pfad oder "all" wird angegeben
     if [[ -z "$modifier_or_testpath" ]]; then # KEIN Argument übergeben -> Standard: kleinsten suchen
         local find_smallest_test_command="find /app/tests/PHPUnit -type f -name '*Test.php' -print0 | xargs -0 du -b | sort -n | head -n 1 | awk '{print \$2}'"
         local smallest_test_file_path
-        smallest_test_file_path=$(docker run --rm -v "${PROJECT_ROOT}:/app" "$image_name" bash -c "$find_smallest_test_command")
+        smallest_test_file_path=$(docker run --rm -v "${PROJECT_ROOT}:/app"  "$image_name" bash -c "$find_smallest_test_command")
 
         if [[ -n "$smallest_test_file_path" && "$smallest_test_file_path" != *"No such file or directory"* ]]; then
             test_command_args="$smallest_test_file_path" # Der gefundene Pfad wird als Argument verwendet
@@ -348,7 +395,7 @@ run_tests() {
          # Fallback zum Standard (kleinsten suchen) oder Abbruch? Hier Fallback:
          local find_smallest_test_command="find /app/tests/PHPUnit -type f -name '*Test.php' -print0 | xargs -0 du -b | sort -n | head -n 1 | awk '{print \$2}'"
          local smallest_test_file_path
-         smallest_test_file_path=$(docker run --rm -v "${PROJECT_ROOT}:/app" "$image_name" bash -c "$find_smallest_test_command")
+         smallest_test_file_path=$(docker run --rm -v "${PROJECT_ROOT}:/app"  "$image_name" bash -c "$find_smallest_test_command")
          if [[ -n "$smallest_test_file_path" && "$smallest_test_file_path" != *"No such file or directory"* ]]; then
              test_command_args="$smallest_test_file_path"
              echo "INFO: Fallback successful: Smallest test file found: $test_command_args" >&2
@@ -375,7 +422,7 @@ run_tests() {
     echo "Executing in container: php /app/vendor/bin/phpunit $test_command_args" >&2
 
     # Führe PHPUnit aus. $test_command_args kann leer sein (für 'all') oder einen Pfad enthalten.
-    docker run --rm -v "${PROJECT_ROOT}:/app" "$image_name" php /app/vendor/bin/phpunit $test_command_args
+    docker run --rm -v "${PROJECT_ROOT}:/app"  "$image_name" php /app/vendor/bin/phpunit $test_command_args
 
 }
 
