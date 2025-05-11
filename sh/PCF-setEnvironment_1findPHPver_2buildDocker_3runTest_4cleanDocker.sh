@@ -13,6 +13,9 @@ SCRIPT_NAME=$(basename "$0")
 SCRIPT_ARGS_STRING="$*"
 FLAG_FILE_PATH="/tmp/pcf_status_shown_on_boot.flag" # Unique name for the flag file
 
+PROJECT_IMAGE_PREFIX="sl5-preg-contentfinder-php" # Wird auch in stop_project_containers und show_help verwendet
+
+
 # Prepare tilde version for display
 display_target_dir=$(echo "$TARGET_PROJECT_DIR" | sed "s|^$HOME|~|")
 
@@ -64,6 +67,8 @@ show_help() {
     echo "  s                Status: Shows current Docker disk usage (docker system df)."
     echo "                   Tip: Run before 'c' or 'bcp' to see the potential effect."
     echo "  stop (oder k)    Stops running containers associated with this project (based on image name pattern)."
+    echo "  i                Interactive shell: Opens a bash shell inside the Docker container"
+    echo "                   for the current project state (with live mount and correct user)."
     echo "  n                Name: Displays the determined Docker image name."
     echo "  p                PHP version: Displays the determined PHP version."
     echo "  h                Help: Displays this help overview."
@@ -313,12 +318,6 @@ build_image() {
         return 1
     fi
 
-
-
-
-
-
-
 }
 
 run_tests() {
@@ -526,9 +525,120 @@ cleanup_docker() {
 }
 
 
+interactive_shell() {
+    if ! check_docker_running; then
+        return 1
+    fi
+
+    local image_name
+    local actual_php_version
+
+    echo "--- PHP Version Detection (for image selection) ---" >&2
+    actual_php_version=$(get_target_php_version) # Holt die reine Versionsnummer
+    echo "-------------------------------------------------" >&2
+
+    if [[ "$actual_php_version" == "unknown" || -z "$actual_php_version" ]]; then
+        echo "ERROR: PHP version is 'unknown'. Cannot determine which image to use for interactive shell." >&2
+        return 1
+    fi
+
+    image_name="sl5-preg-contentfinder-php${actual_php_version}-dev:latest"
+    echo # Leerzeile
+    echo "Starting interactive bash shell in image '$image_name'..." >&2
+    echo "Your project root ('$PROJECT_ROOT' on host) will be mounted to '/app' in the container." >&2
+    echo "The working directory in the container will be '/app'." >&2
+    echo "You will be running as user with UID=$(id -u) GID=$(id -g) (your host user)." >&2
+    echo "Type 'exit' to leave the container shell." >&2
+    echo # Leerzeile
+
+    # Verwende dieselben Optionen wie für den Testlauf, aber starte /bin/bash
+    docker run --rm -it \
+        -v "${PROJECT_ROOT}:/app" \
+        -w /app \
+        -u "$(id -u):$(id -g)" \
+        "$image_name" \
+        /bin/bash
+
+    echo "Exited container shell." >&2
+}
+
+# Funktion, um nach mehrfach laufenden Projekt-Containern zu suchen und zu warnen
+check_for_duplicate_project_containers() {
+    if ! check_docker_running; then
+        return 1 # Docker läuft nicht, keine Prüfung möglich
+    fi
+
+    # Ermittle das aktuell relevante Projekt-Image
+    # Wir brauchen hier nur den Namen, um danach zu filtern.
+    # Die get_target_php_version gibt nur die Versionsnummer, wir bauen den Namen selbst.
+    local current_php_version_for_tag
+    current_php_version_for_tag=$(get_target_php_version) # Holt reine Versionsnummer oder "unknown"
+
+    if [[ "$current_php_version_for_tag" == "unknown" || -z "$current_php_version_for_tag" ]]; then
+        echo "WARNUNG: PHP-Version für Duplikat-Prüfung nicht bestimmbar. Überspringe Prüfung." >&2
+        return 0 # Kein Fehler, aber keine Prüfung möglich
+    fi
+
+    # Das ist das Image-Muster/Name, nach dem wir suchen
+    local target_image_name_pattern="sl5-preg-contentfinder-php${current_php_version_for_tag}-dev"
+    # Wir verwenden hier bewusst nicht den :latest Tag, um flexibler zu sein, falls mal andere Tags existieren,
+    # aber für die Zählung ist der genaue Name mit Tag oft besser.
+    local target_image_fullname="${target_image_name_pattern}:latest"
+
+    echo "INFO: Checking for multiple running containers of image '$target_image_fullname'..." >&2
+
+    # Zähle laufende Container, die exakt dieses Image verwenden
+    # --filter "ancestor=..." ist gut, da es auch auf Basisimages prüft, falls das Tag mal anders ist aber vom selben Build stammt.
+    # Sicherer ist aber, direkt nach dem exakten Image-Namen und Tag zu filtern.
+    local running_container_count
+    running_container_count=$(docker ps --filter "status=running" --filter "ancestor=${target_image_fullname}" --format "{{.ID}}" | wc -l)
+
+    # Alternativ, wenn man nur nach dem Image-Namen (ohne Tag) filtern will:
+    # local running_container_info
+    # running_container_info=$(docker ps --filter "status=running" --format "{{.ID}}\t{{.Image}}" | grep -E "[[:space:]]$target_image_name_pattern")
+    # running_container_count=$(echo "$running_container_info" | wc -l)
+
+
+    # Toleranz: Wie viele laufende Container dieses Typs sind "okay"?
+    # Wenn VS Code einen Dev Container dieses Images verwendet, ist 1 okay.
+    # Wenn das Skript selbst temporäre Container startet, sollte danach 0 sein (wegen --rm).
+    # Setzen wir die Toleranz mal auf 1 (z.B. für einen laufenden VS Code Dev Container).
+    # Wenn du aber erwartest, dass NIE einer läuft, setze es auf 0.
+    local allowed_running_count=1
+
+    if [ "$running_container_count" -gt "$allowed_running_count" ]; then
+        echo "" >&2
+        echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" >&2
+        echo "WARNUNG: Es laufen $running_container_count Container des Images '$target_image_fullname'." >&2
+        echo "         Erwartet wurden maximal $allowed_running_count." >&2
+        echo "         Dies könnte Ressourcen verschwenden oder zu unerwartetem Verhalten führen." >&2
+        echo "Laufende Container dieses Images:" >&2
+        docker ps --filter "status=running" --filter "ancestor=${target_image_fullname}" --format "table {{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Image}}" >&2
+        echo "" >&2
+        echo "Empfehlung:" >&2
+        echo "  - Überprüfen Sie die laufenden Container mit 'docker ps'." >&2
+        echo "  - Stoppen Sie nicht benötigte Container mit 'docker stop <CONTAINER_ID_oder_NAME>'." >&2
+        echo "  - Sie können die Aktion 'pcf stop' (oder 'pcf k') verwenden, um zu versuchen," >&2
+        echo "    projektbezogene Container (basierend auf dem Image-Präfix) zu stoppen." >&2
+        echo "  - Die Aktion 'pcf c' (cleanup) entfernt gestoppte Container." >&2
+        echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" >&2
+        echo "" >&2
+        # Hier KEIN automatisches Stoppen, nur eine Warnung. Der User soll entscheiden.
+        # Ein automatisches Stoppen wäre zu riskant ohne genaue Identifikation des "richtigen" Containers.
+    elif [ "$running_container_count" -eq 0 ] && [ "$allowed_running_count" -ge 1 ]; then
+         echo "INFO: Kein Container des Images '$target_image_fullname' läuft aktuell (was oft normal ist) (docker ps -a)." >&2
+    else
+        echo "INFO: $running_container_count Container des Images '$target_image_fullname' laufen (innerhalb der Toleranz von $allowed_running_count)." >&2
+    fi
+    echo "" >&2
+}
+
 # ====================================================================
 # --- SCRIPT LOGIC STARTS HERE (AFTER ALL FUNCTION DEFINITIONS) ---
 # ====================================================================
+
+# --- Prüfung auf doppelte Projekt-Container ---
+check_for_duplicate_project_containers # Aufruf der neuen Funktion
 
 # 1. Prüfen, ob überhaupt Argumente da sind
 if [ $# -eq 0 ]; then
@@ -631,6 +741,9 @@ case "$action" in
         echo
         echo "Tip: Use 'c' (cleanup) to free up unused resources." >&2
         ;;
+    i)
+        interactive_shell
+        ;;
     n|name)
         # Docker wird nicht benötigt, läuft hier direkt
         img_name=$(get_target_php_version)
@@ -661,3 +774,7 @@ case "$action" in
         exit 1
         ;;
 esac
+
+
+
+
