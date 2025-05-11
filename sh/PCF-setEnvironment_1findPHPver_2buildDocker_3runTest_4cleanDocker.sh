@@ -13,11 +13,20 @@ SCRIPT_NAME=$(basename "$0")
 SCRIPT_ARGS_STRING="$*"
 FLAG_FILE_PATH="/tmp/pcf_status_shown_on_boot.flag" # Unique name for the flag file
 
+CORE_PROJECT_IMAGE_PATTERN="sl5-preg-contentfinder"
+
 PROJECT_IMAGE_PREFIX="sl5-preg-contentfinder-php" # Wird auch in stop_project_containers und show_help verwendet
+
+# --- Globale Variablen für den Modus ---
+RUNNING_IN_VSCODE_CONTAINER_ID="" # Wird gesetzt, wenn ein VS Code Container gefunden wird
+EFFECTIVE_WORKING_DIR="/app"      # Standard-Arbeitsverzeichnis im Container
+EFFECTIVE_USER_SPEC=""            # Für docker run: -u ... / Für docker exec: -u <user_im_vscode_container> (optional)
 
 
 # Prepare tilde version for display
 display_target_dir=$(echo "$TARGET_PROJECT_DIR" | sed "s|^$HOME|~|")
+
+
 
 # Check if the target project directory exists
 if [ ! -d "$TARGET_PROJECT_DIR" ]; then
@@ -228,6 +237,139 @@ get_target_php_version() {
     fi
 }
 
+
+
+get_vscode_dev_container_id_for_project() {
+    docker ps -q --filter "status=running" --filter "label=devcontainer.local_folder=${PROJECT_ROOT}" | head -n 1
+}
+
+# Funktion, um zu bestimmen, ob wir 'docker run' oder 'docker exec' verwenden
+# und um den Basis-Image-Namen (für 'docker run') zu bekommen
+initialize_execution_mode_and_image() {
+    RUNNING_IN_VSCODE_CONTAINER_ID=$(get_vscode_dev_container_id_for_project)
+
+    if [ -n "$RUNNING_IN_VSCODE_CONTAINER_ID" ]; then
+        echo "INFO: Active VS Code Dev Container found (ID: $RUNNING_IN_VSCODE_CONTAINER_ID). Operations will target this container." >&2
+        # Den Benutzer des VS Code Containers ermitteln (optional, wenn man ihn braucht)
+        # local vscode_container_user=$(docker inspect --format='{{.Config.User}}' "$RUNNING_IN_VSCODE_CONTAINER_ID")
+        # if [ -z "$vscode_container_user" ]; then vscode_container_user="root"; fi # Fallback
+        # EFFECTIVE_USER_SPEC="-u $vscode_container_user" # Für docker exec
+        # Für die meisten Befehle in einem laufenden Dev Container ist kein explizites -u bei exec nötig.
+    else
+        echo "INFO: No active VS Code Dev Container found. Operations will use 'pcf b'-built images and new containers." >&2
+        # Ermittle das pcf-Image (wie bisher)
+        local actual_php_version
+        actual_php_version=$(get_target_php_version)
+        if [[ "$actual_php_version" == "unknown" || -z "$actual_php_version" ]]; then
+            echo "ERROR: PHP version is 'unknown'. Cannot determine image for operations." >&2
+            return 1 # Fehler
+        fi
+        PCF_IMAGE_NAME="${PROJECT_IMAGE_PREFIX}${actual_php_version}-dev:latest"
+        EFFECTIVE_USER_SPEC="-u $(id -u):$(id -g)" # Für docker run
+    fi
+    return 0
+}
+
+check_for_duplicate_project_containers() {
+    if ! check_docker_running; then
+        return 1 # Docker läuft nicht, keine Prüfung möglich
+    fi
+
+    # CORE_PROJECT_IMAGE_PATTERN ist global definiert, z.B. "sl5-preg-contentfinder"
+    echo "INFO: Checking for running containers related to project pattern '*${CORE_PROJECT_IMAGE_PATTERN}*'..." >&2
+
+    # Finde alle laufenden Container, deren Image-Name das Kernmuster enthält.
+    # Wir müssen hier vorsichtig sein, um false positives zu vermeiden, aber für deinen Fall sollte es passen.
+    local running_project_related_container_info
+    # Das Leerzeichen vor dem Muster in grep hilft, den Anfang des Image-Namens im Format-Output zu treffen
+    running_project_related_container_info=$(docker ps --filter "status=running" --format "{{.ID}}\t{{.Image}}\t{{.Names}}" | grep -E "[[:space:]](vsc-)?${CORE_PROJECT_IMAGE_PATTERN}")
+
+    local running_container_count
+    if [ -n "$running_project_related_container_info" ]; then
+        running_container_count=$(echo "$running_project_related_container_info" | wc -l)
+    else
+        running_container_count=0
+    fi
+
+    # Toleranz: Wie viele laufende Container, die dieses Muster matchen, sind "okay"?
+    # 1 für einen potenziellen VS Code Dev Container
+    # + 0 für temporäre pcf-Skript-Container (da diese --rm haben sollten)
+    # Wenn pcf i oder pcf t gerade läuft, könnte es kurzzeitig 2 sein.
+    # Wir setzen die Schwelle für eine Warnung vielleicht auf > 1.
+    # Oder wir sind strenger und sagen, wenn pcf nicht aktiv einen temporären Container nutzt, sollte nur der VS Code Container laufen (falls überhaupt).
+    local allowed_running_count=1
+    # Wenn du erwartest, dass auch der VS Code Container normalerweise nicht läuft, setze auf 0.
+    # Wenn du oft pcf i parallel zum VS Code Dev Container nutzt, vielleicht 2.
+
+    if [ "$running_container_count" -gt "$allowed_running_count" ]; then
+        echo "" >&2
+        echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" >&2
+        echo "WARNING: Found $running_container_count running containers related to project pattern '*${CORE_PROJECT_IMAGE_PATTERN}*'." >&2
+        echo "         Expected a maximum of $allowed_running_count (e.g., one VS Code Dev Container)." >&2
+        echo "         This could waste resources or lead to unexpected behavior." >&2
+        echo "Running project-related containers found:" >&2
+        echo "$running_project_related_container_info" | awk 'BEGIN {FS="\t"; printf "  %-15s %-70s %s\n", "CONTAINER ID", "IMAGE", "NAMES"} {printf "  %-15s %-70s %s\n", $1, $2, $3}' >&2
+        echo "" >&2
+        echo "Recommendation:" >&2
+        echo "  - Review running containers with 'docker ps'." >&2
+        echo "  - Stop unneeded containers with 'docker stop <CONTAINER_ID_or_NAME>'." >&2
+        echo "  - Action 'pcf stop' (or 'k') attempts to stop containers matching the pcf-specific image prefix." >&2
+        echo "  - Action 'pcf c' (cleanup) removes stopped containers." >&2
+        echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" >&2
+        echo "" >&2
+    elif [ "$running_container_count" -eq 0 ]; then
+         echo "INFO: No running containers found matching project pattern '*${CORE_PROJECT_IMAGE_PATTERN}*'." >&2
+    else
+        echo "INFO: $running_container_count container(s) running matching project pattern '*${CORE_PROJECT_IMAGE_PATTERN}*' (within tolerance of $allowed_running_count)." >&2
+        # Optional: Liste sie trotzdem auf, damit der User sie sieht.
+        if [ "$running_container_count" -gt 0 ]; then # Nur wenn wirklich welche laufen
+             echo "Currently running project-related container(s):" >&2
+             echo "$running_project_related_container_info" | awk 'BEGIN {FS="\t"; printf "  %-15s %-70s %s\n", "CONTAINER ID", "IMAGE", "NAMES"} {printf "  %-15s %-70s %s\n", $1, $2, $3}' >&2
+        fi
+    fi
+    echo "" >&2
+}
+
+
+
+
+
+
+
+
+
+run_composer_dump_autoload() {
+    if ! check_docker_running; then return 1; fi
+
+    echo "INFO: Ensuring autoloader is up-to-date..." >&2
+
+    # Der Befehl, der von bash -c IM CONTAINER ausgeführt werden soll:
+    # Wichtig: $EFFECTIVE_WORKING_DIR hier direkt einsetzen, da es von der äußeren Shell expandiert wird.
+    # Die inneren Anführungszeichen sind hier nicht nötig, da der String für bash -c als EIN Argument übergeben wird.
+    local inner_command="git config --global --add safe.directory ${EFFECTIVE_WORKING_DIR} && composer dump-autoload -o"
+
+    if [ -n "$RUNNING_IN_VSCODE_CONTAINER_ID" ]; then
+        # Übergebe 'bash', '-c', und den 'inner_command' als separate Argumente an docker exec
+        if ! docker exec -w "${EFFECTIVE_WORKING_DIR}" "$RUNNING_IN_VSCODE_CONTAINER_ID" bash -c "$inner_command"; then
+            echo "ERROR: Failed to dump autoloader in VS Code container." >&2; return 1;
+        fi
+    else # Starte neuen Container
+        if [ -z "$PCF_IMAGE_NAME" ]; then echo "ERROR: PCF_IMAGE_NAME not set for dump-autoload."; return 1; fi
+        # Hier ist es ähnlich, der $inner_command wird an die bash im neuen Container übergeben
+        if ! docker run --rm \
+            -v "${PROJECT_ROOT}:${EFFECTIVE_WORKING_DIR}" \
+            -w "${EFFECTIVE_WORKING_DIR}" \
+            $EFFECTIVE_USER_SPEC \
+            "$PCF_IMAGE_NAME" \
+            bash -c "$inner_command"; then # "$inner_command" als ein Argument für -c
+            echo "ERROR: Failed to dump autoloader in new container." >&2; return 1;
+        fi
+    fi
+    echo "INFO: Autoloader updated." >&2
+    return 0 # Erfolg signalisieren
+}
+
+
 prune_build_cache() {
     if ! check_docker_running; then
         return 1
@@ -242,189 +384,83 @@ prune_build_cache() {
     fi
 }
 
-build_image() {
-    local build_op_modifier="$1"
-
-    if [[ "$build_op_modifier" == "p" || "$build_op_modifier" == "prune" ]]; then
-        echo "INFO: Build with cache prune requested." >&2 # English Info
-        prune_build_cache
-    elif [[ -n "$build_op_modifier" ]]; then
-        echo "WARNING: Unknown build modifier '$build_op_modifier'. Performing normal build." >&2 # English Warning
-    fi
-
-    if ! check_docker_running; then
-        return 1
-    fi
-
-    local image_name
-    local actual_php_version
-
-    echo "--- PHP Version Detection (Output to STDERR) ---" >&2 # English Header
-    actual_php_version=$(get_target_php_version)
-    echo "----------------------------------------------" >&2 # English Footer
-    echo
-    echo "Current Git state in project '$PROJECT_ROOT': $(git rev-parse --short HEAD) on ref: $(git symbolic-ref -q --short HEAD || git rev-parse HEAD)" # English Info
-
-    if [[ "$actual_php_version" == "unknown" || -z "$actual_php_version" ]]; then
-        echo "ERROR: PHP version is 'unknown'. Aborting build." >&2 # English Error
-        return 1
-    fi
-
-    echo "Using PHP version for image tag: $actual_php_version" # English Info
-    image_name="sl5-preg-contentfinder-php${actual_php_version}-dev:latest"
-    echo "Building Docker image as: $image_name (from context: $PROJECT_ROOT)" # English Info
-
-    if docker build -t "$image_name" . ; then
-        echo "Image $image_name built successfully." # English Success
-
-
-        # --- devcontainer.json aktualisieren ---
-        # sudo apt install jq
-        # sudo pacman -S jq
-        # maybe todo: Du musst VS Code dazu bringen, deine lokale devcontainer.json im Projektverzeichnis zu verwenden und nicht die im globalStorage.
-        local devcontainer_json_path="./.devcontainer/devcontainer.json" # Relativ zum PROJECT_ROOT
-        if [ -f "$devcontainer_json_path" ]; then
-            if command -v jq &> /dev/null; then
-                # Die Variable image_name wurde oben in der Funktion build_image definiert und enthält den korrekten Image-Namen
-                echo "INFO: Updating 'image' field in $devcontainer_json_path to '$image_name'..." >&2
-
-                tmp_json_file=$(mktemp)
-
-                # Verwende $imageName im jq Filter, passend zu --arg imageName
-                if jq --arg imageName "$image_name" \
-   '.image = $imageName | del(.dockerFile?) | del(.context?) | del(.build?)' \
-   "$devcontainer_json_path" > "$tmp_json_file"; then
-                   # Das ? nach den del-Feldern macht das Löschen optional, falls die Felder nicht existieren
-
-                    mv "$tmp_json_file" "$devcontainer_json_path"
-                    echo "INFO: $devcontainer_json_path updated successfully." >&2
-                    echo "      VS Code might need a 'Dev Containers: Rebuild Container' to use the new image." >&2
-                else
-                    echo "WARNING: Failed to update $devcontainer_json_path with jq. jq command failed." >&2
-                    rm -f "$tmp_json_file" # Temporäre Datei im Fehlerfall löschen
-                fi
-            else
-                echo "WARNING: 'jq' command not found. Cannot automatically update $devcontainer_json_path." >&2
-                echo "         Please set 'image': '$image_name' in $devcontainer_json_path manually if needed." >&2
-            fi
-        else
-            echo "INFO: $devcontainer_json_path not found, skipping update." >&2
-        fi
-        # --- ENDE devcontainer.json aktualisieren ---
-
-
-    else
-        echo "Error building image $image_name." >&2 # English Error
-        return 1
-    fi
-
-}
 
 run_tests() {
-    # $1 ist jetzt der optionale Modifikator ODER ein spezifischer Testpfad
+    # $1 ist der optionale Modifikator ODER ein spezifischer Testpfad
     local modifier_or_testpath="$1"
-    local test_command_args="" # Argumente für phpunit
+    local test_command_args=""
 
-    if ! check_docker_running; then
-        return 1
+    if ! check_docker_running; then return 1; fi # Wird am Anfang von initialize_execution_mode_and_image geprüft
+
+    # initialize_execution_mode_and_image() MUSS am Anfang des Skripts oder der Aktion aufgerufen werden,
+    # um RUNNING_IN_VSCODE_CONTAINER_ID und PCF_IMAGE_NAME zu setzen.
+    # Annahme: Das ist schon passiert.
+
+    if [ -n "$RUNNING_IN_VSCODE_CONTAINER_ID" ]; then
+        echo "INFO: Running tests inside active VS Code Dev Container (ID: $RUNNING_IN_VSCODE_CONTAINER_ID)..." >&2
+    else
+        if [ -z "$PCF_IMAGE_NAME" ]; then echo "ERROR: PCF_IMAGE_NAME not set for tests (run 'pcf b' or ensure Git context provides PHP version)."; return 1; fi
+        echo "INFO: Running tests in a new temporary container using image '$PCF_IMAGE_NAME'..." >&2
     fi
 
-    local image_name
-    local actual_php_version
-
-    echo "--- PHP Version Detection (Output to STDERR) ---" >&2
-    actual_php_version=$(get_target_php_version)
-    echo "----------------------------------------------" >&2
-
-    if [[ "$actual_php_version" == "unknown" || -z "$actual_php_version" ]]; then
-        echo "ERROR: PHP version is 'unknown'. Aborting tests." >&2
-        return 1
-    fi
-
-
-
-
-    image_name="sl5-preg-contentfinder-php${actual_php_version}-dev:latest"
-    echo "Using PHP version $actual_php_version for tests with image $image_name."
-
-    echo "INFO: Ensuring autoloader is up-to-date for the current codebase (using 'composer dump-autoload -o')..." >&2
-    # -w /app setzt das Arbeitsverzeichnis für den composer-Befehl
-    if ! docker run --rm -v "${PROJECT_ROOT}:/app"  -w /app  "$image_name" composer dump-autoload -o; then
-        echo "ERROR: Failed to dump autoloader. Aborting tests." >&2
-        return 1
-    fi
-    echo # Leerzeile
-
-
-
-
-
-
-
-
-
-    # Standardmäßig den kleinsten Test suchen, es sei denn, ein spezifischer Pfad oder "all" wird angegeben
-    if [[ -z "$modifier_or_testpath" ]]; then # KEIN Argument übergeben -> Standard: kleinsten suchen
-        local find_smallest_test_command="find /app/tests/PHPUnit -type f -name '*Test.php' -print0 | xargs -0 du -b | sort -n | head -n 1 | awk '{print \$2}'"
-        local smallest_test_file_path
-        smallest_test_file_path=$(docker run --rm -v "${PROJECT_ROOT}:/app"  "$image_name" bash -c "$find_smallest_test_command")
-
-        if [[ -n "$smallest_test_file_path" && "$smallest_test_file_path" != *"No such file or directory"* ]]; then
-            test_command_args="$smallest_test_file_path" # Der gefundene Pfad wird als Argument verwendet
-            echo "INFO: Smallest test file found: $test_command_args" >&2
+    # Logik zur Ermittlung von test_command_args (kleinster, all, spezifisch)
+    # ... (Deine Logik, die ggf. auch docker exec/run für find_smallest_cmd verwendet) ...
+    # Achte darauf, dass diese internen docker exec/run Aufrufe für find_smallest_cmd
+    # auch das korrigierte Quoting für bash -c verwenden, falls sie es nutzen.
+    # Beispiel:
+    if [[ -z "$modifier_or_testpath" ]]; then
+        local find_smallest_cmd="find tests/PHPUnit -maxdepth 1 -type f -name '*Test.php' -print | sort | head -n 1"
+        if [ -n "$RUNNING_IN_VSCODE_CONTAINER_ID" ]; then
+            test_command_args=$(docker exec -w "$EFFECTIVE_WORKING_DIR" "$RUNNING_IN_VSCODE_CONTAINER_ID" bash -c "$find_smallest_cmd")
         else
-            echo "ERROR: Could not find smallest test file. Aborting." >&2
-            return 1
+            test_command_args=$(docker run --rm -v "${PROJECT_ROOT}:${EFFECTIVE_WORKING_DIR}" -w "$EFFECTIVE_WORKING_DIR" $EFFECTIVE_USER_SPEC "$PCF_IMAGE_NAME" bash -c "$find_smallest_cmd")
         fi
-    elif [[ "$(echo "$modifier_or_testpath" | tr '[:upper:]' '[:lower:]')" == "all" ]]; then # Argument ist "all"
-        echo "INFO: 'all' tests requested. Running PHPUnit without specific file (will use configured suite)." >&2
-        test_command_args="" # Kein spezifisches Argument, PHPUnit entscheidet
-    elif [[ "$modifier_or_testpath" == /* || "$modifier_or_testpath" == tests/* || "$modifier_or_testpath" == *.php ]]; then # Argument sieht wie ein Pfad aus
-        echo "INFO: Specific test path provided: $modifier_or_testpath" >&2
-        # Wichtig: Sicherstellen, dass der Pfad relativ zu /app ist, wenn er nicht absolut ist
-        if [[ "$modifier_or_testpath" != /* ]]; then
-           # Annahme: relative Pfade sind relativ zum Projekt-Root /app
-           test_command_args="/app/$modifier_or_testpath"
-        else
-           test_command_args="$modifier_or_testpath" # Ist bereits absolut
+        if [[ -z "$test_command_args" || "$test_command_args" == *"No such file or directory"* || "$test_command_args" == *"find: "* ]]; then
+             echo "ERROR: No smallest test found or error during search." >&2; return 1;
         fi
-        # Hier könnte man noch prüfen, ob die Datei im Container existiert
-    else # Unbekannter Modifikator
-         echo "WARNING: Unknown test modifier or invalid path '$modifier_or_testpath'. Trying to run smallest test..." >&2
-         # Fallback zum Standard (kleinsten suchen) oder Abbruch? Hier Fallback:
-         local find_smallest_test_command="find /app/tests/PHPUnit -type f -name '*Test.php' -print0 | xargs -0 du -b | sort -n | head -n 1 | awk '{print \$2}'"
-         local smallest_test_file_path
-         smallest_test_file_path=$(docker run --rm -v "${PROJECT_ROOT}:/app"  "$image_name" bash -c "$find_smallest_test_command")
-         if [[ -n "$smallest_test_file_path" && "$smallest_test_file_path" != *"No such file or directory"* ]]; then
-             test_command_args="$smallest_test_file_path"
-             echo "INFO: Fallback successful: Smallest test file found: $test_command_args" >&2
-         else
-             echo "ERROR: Could not find smallest test file (fallback failed). Aborting." >&2
-             return 1
-         fi
+        echo "INFO: Will run smallest test: $test_command_args" >&2
+    elif [[ "$(echo "$modifier_or_testpath" | tr '[:upper:]' '[:lower:]')" == "all" ]]; then
+        test_command_args=""
+        echo "INFO: Will run all tests." >&2
+    else # Annahme: spezifischer Pfad
+        test_command_args="$modifier_or_testpath"
+        echo "INFO: Will run specific test(s): $test_command_args" >&2
     fi
 
-    # 4. HINWEIS vor der Ausführung
-    echo "" >&2 # Leerzeile davor
-    echo "--------------------------------------------------------------------" >&2
-    echo "NOTICE: The following test command will run inside the Docker" >&2
-    echo "        container '$image_name', using the PHP $actual_php_version defined" >&2
-    echo "        within that specific image." >&2
-    echo "" >&2
-    echo "        Running 'vendor/bin/phpunit ...' directly on your host machine" >&2
-    echo "        would use your host's installed PHP version and environment," >&2
-    echo "        which might lead to different results or errors." >&2
-    echo "--------------------------------------------------------------------" >&2
-    echo "" >&2 # Leerzeile danach
+    # Führe Autoloader Dump aus
+    if ! run_composer_dump_autoload; then # Ruft die korrigierte Funktion auf
+        # Fehlermeldung kommt schon von run_composer_dump_autoload
+        return 1;
+    fi
 
-    echo "Running tests from project '$PROJECT_ROOT'..."
-    echo "Executing in container: php /app/vendor/bin/phpunit $test_command_args" >&2
+    echo "Executing in container: php vendor/bin/phpunit $test_command_args (working dir: ${EFFECTIVE_WORKING_DIR})" >&2
+    local phpunit_cmd="php vendor/bin/phpunit $test_command_args"
 
-    # Führe PHPUnit aus. $test_command_args kann leer sein (für 'all') oder einen Pfad enthalten.
-    docker run --rm -v "${PROJECT_ROOT}:/app"  "$image_name" php /app/vendor/bin/phpunit $test_command_args
-
+    if [ -n "$RUNNING_IN_VSCODE_CONTAINER_ID" ]; then
+        if ! docker exec -w "${EFFECTIVE_WORKING_DIR}" "$RUNNING_IN_VSCODE_CONTAINER_ID" $phpunit_cmd; then
+            echo "ERROR: PHPUnit execution failed in VS Code container." >&2; return 1;
+        fi
+    else
+        if ! docker run --rm -v "${PROJECT_ROOT}:${EFFECTIVE_WORKING_DIR}" -w "${EFFECTIVE_WORKING_DIR}" $EFFECTIVE_USER_SPEC "$PCF_IMAGE_NAME" $phpunit_cmd; then
+            echo "ERROR: PHPUnit execution failed in new container." >&2; return 1;
+        fi
+    fi
+    return 0 # Erfolg
 }
 
+
+build_image() { # Was macht build jetzt?
+    if [ -n "$RUNNING_IN_VSCODE_CONTAINER_ID" ]; then
+        echo "WARNUNG: Ein VS Code Dev Container läuft. 'pcf b' baut normalerweise das Image, das" >&2
+        echo "         von 'pcf t/i' ohne VS Code Container verwendet wird. Der laufende VS Code Container" >&2
+        echo "         wird hiervon nicht direkt beeinflusst. Verwenden Sie 'Rebuild Container' in VS Code," >&2
+        echo "         um das Image des Dev Containers zu aktualisieren (basierend auf devcontainer.json)." >&2
+        # Trotzdem das "Standard" PCF-Image bauen?
+    fi
+    # ... (Bisherige Logik von build_image zum Bauen von PCF_IMAGE_NAME) ...
+    # Der Teil, der devcontainer.json mit jq modifiziert, ist jetzt weniger sinnvoll,
+    # wenn wir uns primär auf den laufenden VS Code Container verlassen wollen, wenn er da ist.
+}
 
 
 
@@ -525,42 +561,38 @@ cleanup_docker() {
 }
 
 
-interactive_shell() {
-    if ! check_docker_running; then
-        return 1
+
+interactive_shell() { # Die 'pcf i' Aktion
+    if ! check_docker_running; then return 1; fi
+
+    if [ -n "$RUNNING_IN_VSCODE_CONTAINER_ID" ]; then
+        # VS Code Dev Container gefunden!
+        local container_name=$(docker inspect --format="{{.Name}}" "$RUNNING_IN_VSCODE_CONTAINER_ID" | sed 's,^/,,' )
+        echo "INFO: Connecting to active VS Code Dev Container: $container_name (ID: $RUNNING_IN_VSCODE_CONTAINER_ID)." >&2
+        echo "      Working directory and user will be as configured by VS Code." >&2
+        echo "Type 'exit' to leave." >&2; echo
+        if ! (docker exec -it "$RUNNING_IN_VSCODE_CONTAINER_ID" /bin/bash || docker exec -it "$RUNNING_IN_VSCODE_CONTAINER_ID" /bin/sh); then
+             echo "ERROR: Could not start a shell in VS Code Dev Container." >&2; return 1;
+        fi
+    else
+        # Kein VS Code Dev Container, starte neuen temporären
+        if [ -z "$PCF_IMAGE_NAME" ]; then echo "ERROR: PCF_IMAGE_NAME not set for interactive shell."; return 1; fi
+        echo "INFO: No active VS Code Dev Container. Starting new temporary shell in '$PCF_IMAGE_NAME'..." >&2
+        echo "      Project mounted to '${EFFECTIVE_WORKING_DIR}', running as UID/GID of host user." >&2
+        echo "Type 'exit' to leave; container will be removed." >&2; echo
+        if ! docker run --rm -it \
+            -v "${PROJECT_ROOT}:${EFFECTIVE_WORKING_DIR}" \
+            -w "${EFFECTIVE_WORKING_DIR}" \
+            $EFFECTIVE_USER_SPEC \
+            "$PCF_IMAGE_NAME" \
+            /bin/bash; then
+            echo "ERROR: Failed to start new temporary interactive shell." >&2; return 1;
+        fi
     fi
-
-    local image_name
-    local actual_php_version
-
-    echo "--- PHP Version Detection (for image selection) ---" >&2
-    actual_php_version=$(get_target_php_version) # Holt die reine Versionsnummer
-    echo "-------------------------------------------------" >&2
-
-    if [[ "$actual_php_version" == "unknown" || -z "$actual_php_version" ]]; then
-        echo "ERROR: PHP version is 'unknown'. Cannot determine which image to use for interactive shell." >&2
-        return 1
-    fi
-
-    image_name="sl5-preg-contentfinder-php${actual_php_version}-dev:latest"
-    echo # Leerzeile
-    echo "Starting interactive bash shell in image '$image_name'..." >&2
-    echo "Your project root ('$PROJECT_ROOT' on host) will be mounted to '/app' in the container." >&2
-    echo "The working directory in the container will be '/app'." >&2
-    echo "You will be running as user with UID=$(id -u) GID=$(id -g) (your host user)." >&2
-    echo "Type 'exit' to leave the container shell." >&2
-    echo # Leerzeile
-
-    # Verwende dieselben Optionen wie für den Testlauf, aber starte /bin/bash
-    docker run --rm -it \
-        -v "${PROJECT_ROOT}:/app" \
-        -w /app \
-        -u "$(id -u):$(id -g)" \
-        "$image_name" \
-        /bin/bash
-
     echo "Exited container shell." >&2
 }
+
+
 
 # Funktion, um nach mehrfach laufenden Projekt-Containern zu suchen und zu warnen
 check_for_duplicate_project_containers() {
@@ -639,6 +671,22 @@ check_for_duplicate_project_containers() {
 
 # --- Prüfung auf doppelte Projekt-Container ---
 check_for_duplicate_project_containers # Aufruf der neuen Funktion
+
+
+
+
+# 1. Docker-Modus initialisieren (prüft auf laufenden VS Code Dev Container)
+if ! initialize_execution_mode_and_image; then
+    # Fehler bei der Initialisierung (z.B. PHP Version für PCF-Image nicht gefunden)
+    exit 1
+fi
+
+
+
+
+
+
+
 
 # 1. Prüfen, ob überhaupt Argumente da sind
 if [ $# -eq 0 ]; then
