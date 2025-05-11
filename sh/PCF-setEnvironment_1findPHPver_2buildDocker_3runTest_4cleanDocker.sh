@@ -449,19 +449,92 @@ run_tests() {
 }
 
 
-build_image() { # Was macht build jetzt?
-    if [ -n "$RUNNING_IN_VSCODE_CONTAINER_ID" ]; then
-        echo "WARNUNG: Ein VS Code Dev Container läuft. 'pcf b' baut normalerweise das Image, das" >&2
-        echo "         von 'pcf t/i' ohne VS Code Container verwendet wird. Der laufende VS Code Container" >&2
-        echo "         wird hiervon nicht direkt beeinflusst. Verwenden Sie 'Rebuild Container' in VS Code," >&2
-        echo "         um das Image des Dev Containers zu aktualisieren (basierend auf devcontainer.json)." >&2
-        # Trotzdem das "Standard" PCF-Image bauen?
-    fi
-    # ... (Bisherige Logik von build_image zum Bauen von PCF_IMAGE_NAME) ...
-    # Der Teil, der devcontainer.json mit jq modifiziert, ist jetzt weniger sinnvoll,
-    # wenn wir uns primär auf den laufenden VS Code Container verlassen wollen, wenn er da ist.
-}
+build_image() {
+    # $1 ist der optionale Modifikator (z.B. "p" oder "prune")
+    local build_op_modifier="$1"
 
+    # Zuerst die Warnung, falls ein VS Code Dev Container läuft
+    if [ -n "$RUNNING_IN_VSCODE_CONTAINER_ID" ]; then # RUNNING_IN_VSCODE_CONTAINER_ID wird global gesetzt
+        echo "WARNING: An active VS Code Dev Container is running (ID: $RUNNING_IN_VSCODE_CONTAINER_ID)." >&2
+        echo "         'pcf b' will build/update the pcf-managed image (e.g., ${PROJECT_IMAGE_PREFIX}XX-dev:latest)." >&2
+        echo "         This does NOT directly rebuild the image used by the *currently running* VS Code Dev Container." >&2
+        echo "         To update the VS Code Dev Container's image (if it's based on what 'pcf b' produces" >&2
+        echo "         and 'devcontainer.json' points to it), you'll need to use 'Dev Containers: Rebuild Container' in VS Code AFTER this script finishes." >&2
+        echo "" >&2
+    fi
+
+    # Verarbeitung des Modifikators für Cache Prune
+    if [[ "$build_op_modifier" == "p" || "$build_op_modifier" == "prune" ]]; then
+        echo "INFO: Build with cache prune requested." >&2
+        prune_build_cache # Diese Funktion muss definiert sein
+    elif [[ -n "$build_op_modifier" ]]; then
+        echo "WARNING: Unknown build modifier '$build_op_modifier'. Performing normal build." >&2
+    fi
+
+    # Sicherstellen, dass Docker läuft
+    if ! check_docker_running; then # check_docker_running muss definiert sein
+        return 1
+    fi
+
+    # PHP-Version und Image-Namen ermitteln
+    local pcf_image_to_build # Name des Images, das wir bauen wollen
+    local actual_php_version
+
+    echo "--- PHP Version Detection (Output to STDERR) ---" >&2
+    actual_php_version=$(get_target_php_version) # get_target_php_version muss definiert sein
+    echo "----------------------------------------------" >&2
+    echo
+    echo "Current Git state in project '$PROJECT_ROOT': $(git rev-parse --short HEAD) on ref: $(git symbolic-ref -q --short HEAD || git rev-parse HEAD)"
+
+    if [[ "$actual_php_version" == "unknown" || -z "$actual_php_version" ]]; then
+        echo "ERROR: PHP version is 'unknown'. Aborting build." >&2
+        return 1
+    fi
+
+    echo "Using PHP version for image tag: $actual_php_version" >&2
+    # PROJECT_IMAGE_PREFIX ist eine globale Variable, z.B. "sl5-preg-contentfinder-php"
+    pcf_image_to_build="${PROJECT_IMAGE_PREFIX}${actual_php_version}-dev:latest"
+    echo "Building PCF Docker image as: $pcf_image_to_build (from context: $PROJECT_ROOT)" >&2
+
+    # Docker Build ausführen
+    # Die Build-Args für USER_ID/GROUP_ID sind wichtig, damit der 'appuser' im Image die richtige UID/GID hat,
+    # falls VS Code ('remoteUser: "appuser"') diesen User später verwenden soll.
+    if docker build \
+        --build-arg USER_ID="$(id -u)" \
+        --build-arg GROUP_ID="$(id -g)" \
+        -t "$pcf_image_to_build" . ; then  # '.' als Build-Kontext (PROJECT_ROOT)
+        echo "Image $pcf_image_to_build built successfully." >&2
+
+        # --- devcontainer.json aktualisieren ---
+        local devcontainer_json_path="./.devcontainer/devcontainer.json" # Relativ zum PROJECT_ROOT
+        if [ -f "$devcontainer_json_path" ]; then
+            if command -v jq &> /dev/null; then
+                echo "INFO: Updating 'image' field in $devcontainer_json_path to '$pcf_image_to_build'..." >&2
+                tmp_json_file=$(mktemp)
+                if jq --arg imageName "$pcf_image_to_build" \
+                   '.image = $imageName | del(.dockerFile?) | del(.context?) | del(.build?)' \
+                   "$devcontainer_json_path" > "$tmp_json_file"; then
+                    mv "$tmp_json_file" "$devcontainer_json_path"
+                    echo "INFO: $devcontainer_json_path updated successfully." >&2
+                    echo "      VS Code might need a 'Dev Containers: Rebuild Container' to use this new image." >&2
+                else
+                    echo "WARNING: Failed to update $devcontainer_json_path with jq. jq command failed." >&2
+                    rm -f "$tmp_json_file"
+                fi
+            else
+                echo "WARNING: 'jq' command not found. Cannot automatically update $devcontainer_json_path." >&2
+                echo "         Please set 'image': '$pcf_image_to_build' in $devcontainer_json_path manually if needed." >&2
+            fi
+        else
+            echo "INFO: $devcontainer_json_path not found, skipping update of VS Code Dev Container config." >&2
+        fi
+        # --- ENDE devcontainer.json aktualisieren ---
+    else
+        echo "Error building image $pcf_image_to_build." >&2
+        return 1
+    fi
+    return 0 # Erfolg
+}
 
 
 stop_project_containers() {
