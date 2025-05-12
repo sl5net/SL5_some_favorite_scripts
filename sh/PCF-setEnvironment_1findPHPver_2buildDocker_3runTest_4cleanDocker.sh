@@ -350,6 +350,10 @@ run_composer_dump_autoload() {
 
     if [ -n "$RUNNING_IN_VSCODE_CONTAINER_ID" ]; then
         # Übergebe 'bash', '-c', und den 'inner_command' als separate Argumente an docker exec
+
+        docker_cmd_display="docker exec -w \"${EFFECTIVE_WORKING_DIR}\" \"$RUNNING_IN_VSCODE_CONTAINER_ID\" bash -c \"$inner_command\""
+        echo "$docker_cmd_display" >&2
+
         if ! docker exec -w "${EFFECTIVE_WORKING_DIR}" "$RUNNING_IN_VSCODE_CONTAINER_ID" bash -c "$inner_command"; then
             echo "ERROR: Failed to dump autoloader in VS Code container." >&2; return 1;
         fi
@@ -409,7 +413,7 @@ run_tests() {
     # auch das korrigierte Quoting für bash -c verwenden, falls sie es nutzen.
     # Beispiel:
     if [[ -z "$modifier_or_testpath" ]]; then
-        local find_smallest_cmd="find tests/PHPUnit -maxdepth 1 -type f -name '*Test.php' -print | sort | head -n 1"
+        local find_smallest_cmd="find tests/PHPUnit -maxdepth 2 -type f -name '*Test.php' -print | sort | head -n 1"
         if [ -n "$RUNNING_IN_VSCODE_CONTAINER_ID" ]; then
             test_command_args=$(docker exec -w "$EFFECTIVE_WORKING_DIR" "$RUNNING_IN_VSCODE_CONTAINER_ID" bash -c "$find_smallest_cmd")
         else
@@ -592,47 +596,45 @@ stop_project_containers() {
 
 cleanup_docker() {
     if ! check_docker_running; then
-        echo "INFO: Docker not started, cleanup not possible or not needed." >&2 # English Info
+        echo "INFO: Docker not started, cleanup not possible or not needed." >&2
         return 1
     fi
 
-   echo "INFO: Checking for running project-related containers before full cleanup..." >&2
-    # Versuche, projektbezogene Container zu stoppen.
-    # Wenn der User "nein" sagt, gibt stop_project_containers 0 zurück.
-    # Wenn ein Fehler beim Stoppen auftritt, gibt es 1 zurück.
-    if ! stop_project_containers; then
+    # Zuerst ggf. laufende projektbezogene Container stoppen (mit Benutzerbestätigung oder automatisch, je nach deiner stop_project_containers Logik)
+    echo "INFO: Checking for running project-related containers before full cleanup..." >&2
+    if ! stop_project_containers; then # stop_project_containers muss definiert sein und gibt 0 zurück, wenn User "nein" sagt oder keine da sind
         echo "WARNUNG: Could not stop all project-related containers or an error occurred. Cleanup might be incomplete for running containers." >&2
-        # Wir könnten hier entscheiden, abzubrechen, oder fortzufahren.
-        # 'docker system prune' löscht eh nur gestoppte.
-        # return 1 # Optional: Hier abbrechen, wenn Stoppen fehlschlug
+        # Hier entscheiden, ob man abbricht oder weitermacht.
+        # Da system prune eh nur gestoppte Container entfernt, ist weitermachen oft okay.
     fi
-    # Wenn wir hier sind, hat der User entweder "ja" oder "nein" gesagt, oder es gab keine.
-    # Fehler beim Stoppen wurden oben behandelt.
 
-
-    echo "INFO: Starting comprehensive Docker cleanup (docker system prune -af)..." >&2 # English Info
+    echo "INFO: Starting comprehensive Docker Cleanup (docker system prune -af --volumes)..." >&2 # --volumes hinzugefügt
     echo "      This will delete: " >&2
     echo "        - All stopped containers" >&2
     echo "        - All unused networks" >&2
-    echo "        - All unused (dangling and untagged) images" >&2
+    echo "        - All unused (dangling and not tagged) images" >&2
     echo "        - The entire build cache" >&2
-    echo "      Running containers and tagged images that are still in use (e.g., as a base for others)" >&2
-    echo "      should NOT be removed." >&2
+    echo "        - ALL UNUSED VOLUMES (including named ones like 'vscode' if not in use)" >&2 # Wichtiger Hinweis
+    echo "      Running containers and tagged images that are still in use (e.g., as a base for others)," >&2
+    echo "      and VOLUMES USED BY ANY (even stopped) CONTAINER, should NOT be removed." >&2
     echo "" >&2
-    echo "Current Docker disk usage (before cleanup):" >&2 # English Info
+    echo "Current Docker disk usage (before cleanup):" >&2
     docker system df
     echo "" >&2
 
-    if docker system prune -af; then
-        echo "INFO: Docker system successfully pruned." >&2 # English Info
+    echo "docker system prune -af --volumes (Aktion 'c'): it doppelte ALL volumes"
+    # docker system prune -af (löscht keine benannten, ungenutzten Volumes).
+
+    # Der entscheidende Befehl mit --volumes
+    if docker system prune -af --volumes; then # -a (all unused images), -f (force), --volumes (all unused volumes)
+        echo "INFO: Docker successfully pruned (including unused volumes)." >&2
     else
-        echo "WARNING: Problem pruning the Docker system." >&2 # English Warning
+        echo "WARNUNG: Problem pruning the Docker System." >&2
     fi
     echo "" >&2
-    echo "Docker disk usage after cleanup:" >&2 # English Info
+    echo "Docker disk usage after cleanup:" >&2
     docker system df
 }
-
 
 
 interactive_shell() { # Die 'pcf i' Aktion
