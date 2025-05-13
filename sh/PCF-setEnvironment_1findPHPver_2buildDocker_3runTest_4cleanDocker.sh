@@ -70,6 +70,7 @@ show_help() {
     echo "  c                Cleanup (Full): Prunes ALL unused Docker resources."
     echo "                   (stopped containers, unused networks, unused images, build cache)."
     echo "                   Equivalent to 'docker system prune -af'."
+    echo "    If you know the name(e.g. vscode), maybe use:   docker volume rm vscode "
     echo "  bcp              Build Cache Prune: Prunes ONLY the Docker build cache."
     echo "                   Useful to ensure the next build is fresh."
     echo "                   Equivalent to 'docker builder prune -af'."
@@ -623,6 +624,7 @@ cleanup_docker() {
     echo "" >&2
 
     echo "docker system prune -af --volumes (Aktion 'c'): it doppelte ALL volumes"
+    echo "If you know the name(e.g. vscode), maybe use:   docker volume rm vscode "
     # docker system prune -af (löscht keine benannten, ungenutzten Volumes).
 
     # Der entscheidende Befehl mit --volumes
