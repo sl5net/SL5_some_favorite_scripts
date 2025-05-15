@@ -267,6 +267,21 @@ initialize_execution_mode_and_image() {
         # Für die meisten Befehle in einem laufenden Dev Container ist kein explizites -u bei exec nötig.
     else
         echo "INFO: No active VS Code Dev Container found. Operations will use 'pcf b'-built images and new containers." >&2
+
+
+        command_to_copy="pcf b"
+        echo "$command_to_copy"
+        if [ -n "$DISPLAY" ] && command -v xclip >/dev/null 2>&1; then
+            echo -n "$command_to_copy" | xclip -selection clipboard
+            echo "  INFO: $command_to_copy copied to clipboard." >&2
+        elif command -v xclip >/dev/null 2>&1; then
+                echo "  INFO: xclip is installed, but no graphical display is available to copy to clipboard." >&2
+        else
+                echo "  INFO: 'xclip' utility not found. To enable copy-to-clipboard functionality," >&2
+                echo "        please install it (e.g., 'sudo apt install xclip' or 'sudo pacman -S xclip')." >&2
+        fi
+
+
         # Ermittle das pcf-Image (wie bisher)
         local actual_php_version
         actual_php_version=$(get_target_php_version)
