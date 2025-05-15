@@ -123,23 +123,32 @@ check_docker_running() {
 
         if command -v docker &> /dev/null; then # Docker ist installiert
             # Versuche, die wahrscheinlichste Startmethode vorzuschlagen
+
+            command_to_copy="sudo systemctl start docker"
+            echo "$command_to_copy"
+            if [ -n "$DISPLAY" ] && command -v xclip >/dev/null 2>&1; then
+                echo -n "$command_to_copy" | xclip -selection clipboard
+                echo "  INFO: $command_to_copy copied to clipboard." >&2
+            elif command -v xclip >/dev/null 2>&1; then
+                    echo "  INFO: xclip is installed, but no graphical display is available to copy to clipboard." >&2
+            else
+                    echo "  INFO: 'xclip' utility not found. To enable copy-to-clipboard functionality," >&2
+                    echo "        please install it (e.g., 'sudo apt install xclip' or 'sudo pacman -S xclip')." >&2
+                fi
+            else
+                    echo "  Cannot determine standard service manager (systemctl or service)." >&2
+            fi
+
             if command -v systemctl &> /dev/null; then
                  # Auf systemd-Systemen ist 'start docker.service' der Standard.
-                 # Wir schlagen es vor, auch wenn die list-units-Prüfung fehlschlug,
-                 # da es oft trotzdem funktioniert, wenn Docker installiert ist.
                  echo "  To start Docker for this session, try:" >&2
                  echo "sudo systemctl start docker"
                  # Optional: Füge einen Hinweis hinzu, falls der Benutzer weiß, dass es anders ist
                  echo "  (This is the standard command on most systemd systems like Manjaro.)" >&2
             elif command -v service &> /dev/null; then # Fallback für ältere Systeme
                 echo "  To start Docker for this session, try:" >&2
-                 echo "  (For older systems using 'service')" >&2
-                echo "sudo service docker start"
-            else
-                 # Wenn weder systemctl noch service gefunden wurden (sehr unwahrscheinlich)
-                 echo "  Cannot determine standard service manager (systemctl or service)." >&2
-                 echo "  Please check your OS documentation on how to start the Docker service manually." >&2
-            fi
+                echo "  (For older systems using 'service')" >&2
+
         else # Docker ist nicht installiert
             echo "  Docker command not found. Docker might not be installed." >&2
             echo "  On Manjaro/Arch Linux, you can install Docker with:" >&2
@@ -438,13 +447,16 @@ run_tests() {
         return 1;
     fi
 
-    echo "Executing in container: php vendor/bin/phpunit $test_command_args (working dir: ${EFFECTIVE_WORKING_DIR})" >&2
+    echo "Executing in container : php vendor/bin/phpunit $test_command_args (working dir: ${EFFECTIVE_WORKING_DIR})" >&2
+
     local phpunit_cmd="php vendor/bin/phpunit $test_command_args"
 
     if [ -n "$RUNNING_IN_VSCODE_CONTAINER_ID" ]; then
+
         if ! docker exec -w "${EFFECTIVE_WORKING_DIR}" "$RUNNING_IN_VSCODE_CONTAINER_ID" $phpunit_cmd; then
             echo "ERROR: PHPUnit execution failed in VS Code container." >&2; return 1;
         fi
+        echo "CONTAINER_ID: $RUNNING_IN_VSCODE_CONTAINER_ID " >&2;
     else
         if ! docker run --rm -v "${PROJECT_ROOT}:${EFFECTIVE_WORKING_DIR}" -w "${EFFECTIVE_WORKING_DIR}" $EFFECTIVE_USER_SPEC "$PCF_IMAGE_NAME" $phpunit_cmd; then
             echo "ERROR: PHPUnit execution failed in new container." >&2; return 1;
@@ -608,7 +620,13 @@ cleanup_docker() {
         # Hier entscheiden, ob man abbricht oder weitermacht.
         # Da system prune eh nur gestoppte Container entfernt, ist weitermachen oft okay.
     fi
-
+    if ! stop_project_containers; then # stop_project_containers muss definiert sein und gibt 0 zurück, wenn User "nein" sagt oder keine da sind
+        echo "WARNUNG: Could not stop all project-related containers or an error occurred. Cleanup might be incomplete for running containers." >&2
+        # Hier entscheiden, ob man abbricht oder weitermacht.
+        # Da system prune eh nur gestoppte Container entfernt, ist weitermachen oft okay.
+    fi
+    echo "Line 616: docker volume rm vscode" >&2
+docker volume rm vscode
     echo "INFO: Starting comprehensive Docker Cleanup (docker system prune -af --volumes)..." >&2 # --volumes hinzugefügt
     echo "      This will delete: " >&2
     echo "        - All stopped containers" >&2
@@ -809,6 +827,10 @@ if [ $docker_needed -eq 1 ] && [ $docker_is_running -eq 1 ] && [ ! -f "$FLAG_FIL
     fi
     echo "----------------------------------------------------------------------" >&2
     echo
+
+    echo "- Next: composer update --- /( its sometimes forgotten )--------------" >&2
+    composer update
+
 fi
 
 
