@@ -129,6 +129,7 @@ check_docker_running() {
             if [ -n "$DISPLAY" ] && command -v xclip >/dev/null 2>&1; then
                 echo -n "$command_to_copy" | xclip -selection clipboard
                 echo "  INFO: $command_to_copy copied to clipboard." >&2
+                exit
             elif command -v xclip >/dev/null 2>&1; then
                     echo "  INFO: xclip is installed, but no graphical display is available to copy to clipboard." >&2
             else
